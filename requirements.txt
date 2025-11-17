@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+redis
+pydantic
+python-dotenv
+requests
+openai
+tiktoken
+weaviate-client
+beautifulsoup4
+httpx

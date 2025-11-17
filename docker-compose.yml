@@ -1,0 +1,43 @@
+version: '3.9'
+
+services:
+
+  backend:
+    build: ./backend
+    container_name: ai-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - postgres
+      - weaviate
+      - redis
+
+  postgres:
+    image: postgres:15
+    container_name: ai-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: ai_reception
+    ports:
+      - "5433:5432"
+
+  weaviate:
+    image: semitechnologies/weaviate:latest
+    container_name: ai-weaviate
+    restart: always
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      ENABLE_MODULES: text2vec-openai
+      OPENAI_APIKEY: ${OPENAI_API_KEY}
+    ports:
+      - "8080:8080"
+
+  redis:
+    image: redis:7
+    container_name: ai-redis
+    ports:
+      - "6379:6379"
