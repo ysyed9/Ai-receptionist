@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from twilio.request_validator import RequestValidator
 from app.db import SessionLocal
@@ -54,30 +55,42 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
 
     # Clean number format
     to_number = to_number.strip()
+    
+    # Normalize phone number: add + if missing
+    if to_number and not to_number.startswith('+'):
+        to_number = '+' + to_number
+    
+    print(f"📞 Inbound call: To={to_number}, From={from_number}")
 
     # --------------------------
     # 3. Find business by phone number
     # --------------------------
     business = get_business_by_phone(db, to_number)
+    print(f"🔍 Business lookup result: {business}")
 
     if not business:
-        return f"""
-        <Response>
-            <Say>Sorry, this number is not assigned to any business.</Say>
-        </Response>
-        """
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Sorry, this number is not assigned to any business.</Say>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
 
     # --------------------------
     # 4. Return TwiML for media streaming
     # (Phase 4 will connect audio to GPT)
     # --------------------------
     # Twilio will stream audio to /call/stream
-    stream_url = f"{os.getenv('API_URL')}/call/stream?business_id={business.id}"
+    # Convert HTTPS to WSS for WebSocket
+    api_url = os.getenv('API_URL')
+    ws_url = api_url.replace('https://', 'wss://').replace('http://', 'ws://')
+    stream_url = f"{ws_url}/call/stream?business_id={business.id}"
 
-    return f"""
-    <Response>
-        <Connect>
-            <Stream url="{stream_url}" />
-        </Connect>
-    </Response>
-    """
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Connecting you to our AI receptionist.</Say>
+    <Start>
+        <Stream url="{stream_url}" />
+    </Start>
+</Response>"""
+    
+    return Response(content=twiml, media_type="application/xml")

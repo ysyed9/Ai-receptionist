@@ -15,3 +15,5 @@ beautifulsoup4
 pydantic-settings
 httpx
 python-multipart
+websockets
+pydub
