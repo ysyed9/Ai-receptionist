@@ -1,9 +1,20 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.models.business import Business
 from app.schemas.business import BusinessCreate
+from fastapi import HTTPException
 
 
 def create_business(db: Session, data: BusinessCreate):
+    # Check if phone number already exists (if provided)
+    if data.phone_number:
+        existing = get_business_by_phone(db, data.phone_number)
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Business with phone number {data.phone_number} already exists"
+            )
+    
     business = Business(
         name=data.name,
         phone_number=data.phone_number,
@@ -14,10 +25,17 @@ def create_business(db: Session, data: BusinessCreate):
         allowed_actions=data.allowed_actions,
         appointment_credentials=data.appointment_credentials
     )
-    db.add(business)
-    db.commit()
-    db.refresh(business)
-    return business
+    try:
+        db.add(business)
+        db.commit()
+        db.refresh(business)
+        return business
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Database integrity error: {str(e)}"
+        )
 
 
 def get_business_by_id(db: Session, business_id: int):

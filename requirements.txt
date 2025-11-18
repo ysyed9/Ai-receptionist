@@ -11,3 +11,6 @@ tiktoken
 weaviate-client
 beautifulsoup4
 httpx
+twilio
+pydantic-settings
+python-multipart

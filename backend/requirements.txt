@@ -1,5 +1,8 @@
 fastapi
 uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+redis
 pydantic
 python-dotenv
 requests
@@ -11,3 +14,4 @@ twilio
 beautifulsoup4
 pydantic-settings
 httpx
+python-multipart

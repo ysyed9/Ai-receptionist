@@ -6,11 +6,37 @@ from app.services.chunker import chunk_text
 from app.models.document import BusinessDocument
 
 
-client = OpenAI()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-weaviate_client = weaviate.Client(os.getenv("WEAVIATE_URL"))
+# Lazy initialization of weaviate client
+_weaviate_client = None
+CLASS_NAME = os.getenv("WEAVIATE_CLASS_NAME", "BusinessDocs")
 
-CLASS_NAME = os.getenv("WEAVIATE_CLASS_NAME")  # BusinessDocs
+
+def get_weaviate_client():
+    global _weaviate_client
+    if _weaviate_client is None:
+        weaviate_url = os.getenv("WEAVIATE_URL")
+        if not weaviate_url:
+            raise ValueError("WEAVIATE_URL environment variable is not set")
+        # Parse URL for weaviate-client v4.x API
+        from urllib.parse import urlparse
+        parsed = urlparse(weaviate_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 8080
+        scheme = parsed.scheme or "http"
+        is_secure = (scheme == "https")
+        
+        # Use connect_to_custom for v4.x API
+        _weaviate_client = weaviate.connect_to_custom(
+            http_host=host,
+            http_port=port,
+            http_secure=is_secure,
+            grpc_host=host,
+            grpc_port=50051,
+            grpc_secure=is_secure
+        )
+    return _weaviate_client
 
 
 def embed_text(text: str):
@@ -23,17 +49,31 @@ def embed_text(text: str):
 
 def ingest_text(db: Session, business_id: int, text: str, source="manual"):
     chunks = chunk_text(text)
+    weaviate_client = get_weaviate_client()
+
+    # Get or create collection
+    try:
+        collection = weaviate_client.collections.get(CLASS_NAME)
+    except Exception:
+        # Collection doesn't exist, create it
+        weaviate_client.collections.create(
+            name=CLASS_NAME,
+            properties=[
+                {"name": "text", "dataType": ["text"]},
+                {"name": "business_id", "dataType": ["text"]},
+            ]
+        )
+        collection = weaviate_client.collections.get(CLASS_NAME)
 
     for chunk in chunks:
         vector = embed_text(chunk)
 
-        # Store in vector DB
-        weaviate_client.data_object.create(
-            data_obj={
+        # Store in vector DB using v4.x API
+        collection.data.insert(
+            properties={
                 "business_id": str(business_id),
                 "text": chunk
             },
-            class_name=CLASS_NAME,
             vector=vector
         )
 
@@ -51,16 +91,28 @@ def ingest_text(db: Session, business_id: int, text: str, source="manual"):
 
 def search_knowledge(business_id: int, query: str):
     query_vector = embed_text(query)
+    weaviate_client = get_weaviate_client()
 
-    nearVector = {"vector": query_vector}
-
-    result = weaviate_client.query.get(
-        CLASS_NAME,
-        ["text", "business_id"]
-    ).with_near_vector(nearVector).with_limit(5).do()
-
-    if "data" in result:
-        return result["data"]["Get"][CLASS_NAME]
-
-    return []
-
+    try:
+        collection = weaviate_client.collections.get(CLASS_NAME)
+        
+        # Query using v4.x API
+        response = collection.query.near_vector(
+            near_vector=query_vector,
+            limit=5,
+            return_properties=["text", "business_id"]
+        )
+        
+        # Extract results
+        results = []
+        if response.objects:
+            for obj in response.objects:
+                results.append({
+                    "text": obj.properties.get("text"),
+                    "business_id": obj.properties.get("business_id")
+                })
+        
+        return results
+    except Exception as e:
+        print(f"Search error: {e}")
+        return []
