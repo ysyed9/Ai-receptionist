@@ -1,18 +1,17 @@
 from fastapi import FastAPI
 
-from app.routers import business, call, rag, actions
+from app.routers import business
+from app.db import Base, engine
+from app.models.business import Business  # ensure model is imported
 
 
-app = FastAPI(title="AI Receptionist API")
+Base.metadata.create_all(bind=engine)
 
+app = FastAPI(title="AI Receptionist Backend")
 
 app.include_router(business.router)
-app.include_router(call.router)
-app.include_router(rag.router)
-app.include_router(actions.router)
 
 
 @app.get("/")
 def root():
-    return {"message": "AI Receptionist is running!"}
-
+    return {"status": "running"}
