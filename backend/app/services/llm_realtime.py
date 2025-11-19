@@ -79,7 +79,11 @@ Instructions: {business.instructions}
 
 When someone connects, greet them warmly and naturally, then be ready to help with whatever they need.
 
-IMPORTANT: After greeting, you MUST actively listen and respond to whatever the caller says. Do not just greet and wait silently - actually help them with their questions or requests.
+CRITICAL: After greeting, you MUST actively listen and respond to whatever the caller says. 
+- When you hear a question, answer it immediately
+- When they ask for information, provide it
+- When they want to schedule, collect the information
+- ALWAYS respond after the caller finishes speaking - do not stay silent
 
 If a caller asks business-related questions, check RAG memory using function: rag_search.
 
@@ -90,9 +94,9 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     "input_audio_transcription": {"model": "whisper-1"},
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.6,
-                        "prefix_padding_ms": 500,
-                        "silence_duration_ms": 1000
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 800
                     },
                     "tools": [
                         {
@@ -165,12 +169,21 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     async for event in openai_ws:
                         event_type = event.type
                         
+                        # Track response start
+                        if event_type == "response.created":
+                            log(f"🎯 AI response started generating")
+                        
+                        elif event_type == "response.done":
+                            log(f"✅ AI response complete")
+                        
                         # Send audio to Twilio
-                        if event_type == "response.audio.delta":
+                        elif event_type == "response.audio.delta":
                             if hasattr(event, 'delta') and event.delta and stream_sid:
                                 # Send as Twilio media message (audio is base64 from OpenAI)
                                 payload = event.delta
-                                print(f"🔊 Sending {len(payload)} bytes at timestamp {timestamp_ms}", flush=True)
+                                # Log first audio chunk to confirm AI is responding
+                                if timestamp_ms == 0:
+                                    log(f"🔊 AI started responding - sending audio to caller")
                                 
                                 await websocket.send_text(json.dumps({
                                     "event": "media",
@@ -183,7 +196,19 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 
                                 # Increment timestamp (20ms per chunk for 8khz mulaw)
                                 timestamp_ms += 20
-                                print(f"✅ Sent to Twilio", flush=True)
+                        
+                        elif event_type == "response.audio_transcript.delta":
+                            # AI is generating audio transcript (what it's saying)
+                            ai_speech = event.delta if hasattr(event, 'delta') else ""
+                            if ai_speech:
+                                print(f"[AI SPEAKING]: {ai_speech}", end="", flush=True)
+                        
+                        elif event_type == "response.audio_transcript.done":
+                            # AI finished speaking
+                            ai_full_speech = event.transcript if hasattr(event, 'transcript') else ""
+                            print()
+                            if ai_full_speech:
+                                log(f"[AI SAID]: {ai_full_speech}")
                         
                         # Handle function calls
                         elif event_type == "response.function_call_arguments.done":
@@ -300,14 +325,29 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                         
                         # Log transcriptions
                         elif event_type == "conversation.item.input_audio_transcription.completed":
-                            user_text = event.transcript
-                            log(f"[USER]: {user_text}")
-                            transcript_parts.append(f"USER: {user_text}")
-                            
-                            # Update call log with transcript
-                            if call_log and stream_sid:
-                                full_transcript = "\n".join(transcript_parts)
-                                update_call_log(stream_sid, transcript=full_transcript)
+                            user_text = event.transcript if hasattr(event, 'transcript') else ""
+                            if user_text and user_text.strip():
+                                log(f"[USER]: {user_text}")
+                                transcript_parts.append(f"USER: {user_text}")
+                                
+                                # Update call log with transcript
+                                if call_log and stream_sid:
+                                    full_transcript = "\n".join(transcript_parts)
+                                    update_call_log(stream_sid, transcript=full_transcript)
+                                
+                                # Ensure response is created after receiving transcription
+                                log(f"✅ User input received, waiting for AI response...")
+                            else:
+                                # Empty transcription - might be silence or audio quality issue
+                                log(f"⚠️ Received empty transcription - audio might not be clear")
+                        
+                        elif event_type == "response.response_audio_transcript.delta":
+                            # AI is generating audio transcript
+                            log(f"🎵 AI generating audio response...")
+                        
+                        elif event_type == "response.response_audio_transcript.done":
+                            # AI finished generating audio
+                            log(f"✅ AI audio response complete")
                         
                         elif event_type == "response.text.delta":
                             ai_text = event.delta
@@ -331,7 +371,7 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
 
             async def twilio_to_openai():
                 """Twilio → GPT (audio in)"""
-                nonlocal stream_sid
+                nonlocal stream_sid, call_log, caller_number, called_number
                 log("📥 twilio_to_openai loop started")
                 
                 # Send greeting immediately if stream is already ready
@@ -390,16 +430,30 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 
                                 if event == "media":
                                     payload = data.get("media", {}).get("payload", "")
-                                    if payload:
+                                    if payload and len(payload) > 0:
                                         # Twilio sends base64 mulaw payload
                                         # OpenAI expects base64 mulaw
-                                        await openai_ws.send({
-                                            "type": "input_audio_buffer.append",
-                                            "audio": payload
-                                        })
-                                        await openai_ws.send({
-                                            "type": "input_audio_buffer.commit"
-                                        })
+                                        try:
+                                            await openai_ws.send({
+                                                "type": "input_audio_buffer.append",
+                                                "audio": payload
+                                            })
+                                            await openai_ws.send({
+                                                "type": "input_audio_buffer.commit"
+                                            })
+                                            # Log first few frames to confirm audio is being received
+                                            if not hasattr(twilio_to_openai, '_audio_frame_count'):
+                                                twilio_to_openai._audio_frame_count = 0
+                                            twilio_to_openai._audio_frame_count += 1
+                                            if twilio_to_openai._audio_frame_count <= 5:
+                                                log(f"🎤 Audio frame #{twilio_to_openai._audio_frame_count} received from Twilio ({len(payload)} bytes) - sent to OpenAI")
+                                        except Exception as audio_error:
+                                            log(f"⚠️ Error sending audio to OpenAI: {audio_error}")
+                                            import traceback
+                                            traceback.print_exc()
+                                    else:
+                                        if payload == "":
+                                            log(f"⚠️ Received empty audio payload from Twilio")
                                     continue
                                     
                             except json.JSONDecodeError:
