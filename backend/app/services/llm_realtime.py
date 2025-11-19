@@ -91,7 +91,10 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     "voice": "shimmer",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
-                    "input_audio_transcription": {"model": "whisper-1"},
+                    "input_audio_transcription": {
+                        "model": "whisper-1",
+                        "prefix": ""
+                    },
                     "turn_detection": {
                         "type": "server_vad",
                         "threshold": 0.5,
@@ -428,6 +431,14 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 
                                 if event == "stop":
                                     log("⏹ Twilio stream stopped")
+                                    # Commit any remaining audio before stopping
+                                    try:
+                                        await openai_ws.send({
+                                            "type": "input_audio_buffer.commit"
+                                        })
+                                        log("✅ Committed final audio buffer")
+                                    except:
+                                        pass
                                     # End call log
                                     if call_log and stream_sid:
                                         end_call_log(stream_sid)
@@ -441,6 +452,7 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                     # Log ALL media events to debug
                                     if not hasattr(twilio_to_openai, '_media_count'):
                                         twilio_to_openai._media_count = 0
+                                        twilio_to_openai._audio_buffer = []
                                     twilio_to_openai._media_count += 1
                                     
                                     if twilio_to_openai._media_count <= 10 or twilio_to_openai._media_count % 50 == 0:
@@ -450,17 +462,21 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                         # Twilio sends base64 mulaw payload
                                         # OpenAI expects base64 mulaw
                                         try:
+                                            # Append audio to buffer
                                             await openai_ws.send({
                                                 "type": "input_audio_buffer.append",
                                                 "audio": payload
                                             })
-                                            await openai_ws.send({
-                                                "type": "input_audio_buffer.commit"
-                                            })
                                             
-                                            # Log first few frames to confirm audio is being received
-                                            if twilio_to_openai._media_count <= 5:
-                                                log(f"🎤 Audio frame #{twilio_to_openai._media_count} received from Twilio ({len(payload)} bytes) - sent to OpenAI ✅")
+                                            # Batch commits: commit every 5 frames (100ms) instead of every frame
+                                            # This gives OpenAI more context for transcription
+                                            if twilio_to_openai._media_count % 5 == 0:
+                                                await openai_ws.send({
+                                                    "type": "input_audio_buffer.commit"
+                                                })
+                                                # Log occasionally
+                                                if twilio_to_openai._media_count <= 10:
+                                                    log(f"🎤 Batched {twilio_to_openai._media_count} audio frames and committed to OpenAI ✅")
                                         except Exception as audio_error:
                                             log(f"⚠️ Error sending audio to OpenAI: {audio_error}")
                                             import traceback
