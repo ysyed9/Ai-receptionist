@@ -63,7 +63,7 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
 Tone: {business.tone}
 Instructions: {business.instructions}
 
-When someone connects, immediately greet them with: "Hello! Thank you for calling {business.name}. How can I help you today?"
+When someone connects, simply say "Hello" and wait for them to speak.
 
 If a caller asks business-related questions, check RAG memory using function: rag_search.
 
@@ -74,9 +74,9 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     "input_audio_transcription": {"model": "whisper-1"},
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 500
+                        "threshold": 0.6,
+                        "prefix_padding_ms": 500,
+                        "silence_duration_ms": 1000
                     },
                     "tools": [
                         {

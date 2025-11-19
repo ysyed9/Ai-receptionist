@@ -87,7 +87,6 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Connecting you to our AI receptionist.</Say>
     <Connect>
         <Stream url="{stream_url}">
             <Parameter name="business_id" value="{business.id}" />
