@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 from app.services.rag_service import search_knowledge
 from app.services.business_service import get_business_by_id
 from app.services.call_logging import create_call_log, update_call_log, end_call_log
-from app.services.telephony_actions import send_sms, transfer_call, schedule_appointment
+from app.services.telephony_actions import send_sms, transfer_call, schedule_appointment, end_call
 from app.db import SessionLocal
 from fastapi import WebSocket
 
@@ -48,6 +48,11 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
     caller_number = None
     called_number = None
     
+    # Track call ending state
+    end_call_requested = False
+    end_call_reason = None
+    last_audio_sent_time = 0
+    
     # If we already have stream_sid, mark as connected
     if stream_sid:
         log(f"✅ Twilio already connected (streamSid={stream_sid})")
@@ -69,38 +74,56 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
             log("🤖 GPT Realtime session established!")
             
             # Configure session
-            log("📝 Configuring OpenAI session with g711_ulaw audio format...")
+            log("📝 Configuring OpenAI session with pcm16 audio format...")
+            
+            # Build the full instructions
+            full_instructions = f"""CRITICAL LANGUAGE RULE: YOU MUST START IN ENGLISH. Your first greeting MUST be in English. Only switch languages if the caller explicitly speaks another language first.
+
+🚨 CRITICAL CALL MANAGEMENT RULES (YOU MUST FOLLOW THESE):
+1. ALWAYS ask "Is there anything else I can help you with?" after answering questions
+2. When caller says "no", "that's all", "goodbye", "bye", or similar:
+   → Say: "Perfect! Thank you for calling [business name]. Have a great day!"
+   → IMMEDIATELY use the end_call function with reason="conversation_complete"
+   → DO NOT WAIT - call the function right after saying goodbye
+3. When you detect silence (no response from caller):
+   → First silence: Say "Hello? Are you still there?"
+   → Second silence: Say "I'm not hearing anything. If you're still there, please let me know."
+   → Third silence: Say "I'll disconnect now. Feel free to call back anytime!" → IMMEDIATELY use end_call with reason="silent_caller"
+4. After scheduling an appointment:
+   → Confirm details
+   → Say goodbye
+   → IMMEDIATELY use end_call with reason="conversation_complete"
+5. YOU MUST ACTIVELY USE THE end_call FUNCTION - it's required, not optional
+
+{business.instructions}
+
+TECHNICAL NOTES:
+- Use the rag_search function to search the knowledge base for business information
+- Use the end_call function to end calls (required after conversations complete)
+- Allowed actions for this business: {json.dumps(business.allowed_actions)}
+- Tone for this business: {business.tone}"""
+            
+            # Log the first 500 chars of instructions to verify
+            log(f"📋 Instructions preview (first 500 chars):")
+            log(f"   {full_instructions[:500]}...")
+            log(f"   Total length: {len(full_instructions)} characters")
+            
             await openai_ws.session.update(
                 session={
                     "modalities": ["text", "audio"],
-                    "instructions": f"""You are the AI receptionist for {business.name}.
-Tone: {business.tone}
-Instructions: {business.instructions}
-
-When someone connects, greet them warmly and naturally, then be ready to help with whatever they need.
-
-CRITICAL: After greeting, you MUST actively listen and respond to whatever the caller says. 
-- When you hear a question, answer it immediately
-- When they ask for information, provide it
-- When they want to schedule, collect the information
-- ALWAYS respond after the caller finishes speaking - do not stay silent
-
-If a caller asks business-related questions, check RAG memory using function: rag_search.
-
-Allowed actions: {json.dumps(business.allowed_actions)}""",
+                    "instructions": full_instructions,
                     "voice": "shimmer",
-                    "input_audio_format": "g711_ulaw",
-                    "output_audio_format": "g711_ulaw",
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
                     "input_audio_transcription": {
-                        "model": "whisper-1",
-                        "prefix": ""
+                        "model": "whisper-1"
                     },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 800
-                    },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.4,
+                            "prefix_padding_ms": 200,
+                            "silence_duration_ms": 800
+                        },
                     "tools": [
                         {
                             "type": "function",
@@ -149,15 +172,28 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 },
                                 "required": ["appointment_date", "appointment_time", "caller_name", "caller_email"]
                             }
+                        },
+                        {
+                            "type": "function",
+                            "name": "end_call",
+                            "description": "🚨 REQUIRED: End the call by closing the connection. You MUST call this function after saying goodbye. Use when: 1) Caller says 'no', 'that's all', 'goodbye', 'thanks', 'bye' - call IMMEDIATELY after your goodbye message, 2) After 3 attempts with no response from silent caller, 3) After scheduling appointment and confirming details, 4) Spam/robocall detected. DO NOT wait for caller to hang up - YOU must end the call.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "reason": {"type": "string", "description": "Reason for ending: 'conversation_complete' (normal end), 'silent_caller' (no response), 'spam_detected', 'abusive_caller'", "enum": ["conversation_complete", "silent_caller", "spam_detected", "abusive_caller"]}
+                                },
+                                "required": ["reason"]
+                            }
                         }
                     ],
                     "tool_choice": "auto"
                 }
             )
-            log("✅ Session configured: g711_ulaw, voice=alloy")
+            log("✅ Session configured: pcm16 in/out, voice=shimmer, English forced")
 
             async def openai_to_twilio():
                 """AI → Twilio (audio out)"""
+                nonlocal end_call_requested, end_call_reason, last_audio_sent_time
                 log("📤 openai_to_twilio loop started")
                 
                 # Wait for Twilio stream to be ready
@@ -172,6 +208,15 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     async for event in openai_ws:
                         event_type = event.type
                         
+                        # LOG ALL EVENTS for debugging (except audio deltas which are too frequent)
+                        if event_type not in ["response.audio.delta", "response.audio_transcript.delta"]:
+                            log(f"🎯 OpenAI event: {event_type}")
+                        
+                        # LOG ERROR DETAILS
+                        if event_type == "error":
+                            error_msg = getattr(event, 'error', {})
+                            log(f"❌ OpenAI ERROR: {error_msg}")
+                        
                         # Track response start
                         if event_type == "response.created":
                             log(f"🎯 AI response started generating")
@@ -180,36 +225,77 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                         
                         elif event_type == "response.done":
                             log(f"✅ AI response complete")
+                            
+                            # Check if we should end the call now that AI is done speaking
+                            if end_call_requested:
+                                # Calculate how long to wait based on audio duration
+                                # Audio needs time to be sent AND played by Twilio
+                                audio_duration_seconds = last_audio_sent_time / 1000.0
+                                wait_time = audio_duration_seconds + 1.0  # Add 1 second buffer
+                                
+                                log(f"📞 AI finished generating response. Last audio at {last_audio_sent_time}ms")
+                                log(f"⏳ Waiting {wait_time:.1f} seconds for audio to finish playing...")
+                                await asyncio.sleep(wait_time)
+                                
+                                log(f"📞 Ending call now. Reason: {end_call_reason}")
+                                await end_call(end_call_reason, websocket)
+                                return  # Exit the loop
                         
                         # Send audio to Twilio
                         elif event_type == "response.audio.delta":
                             if hasattr(event, 'delta') and event.delta and stream_sid:
-                                # Send as Twilio media message (audio is base64 from OpenAI)
-                                payload = event.delta
-                                # Log first audio chunk to confirm AI is responding
-                                if timestamp_ms == 0:
-                                    log(f"🔊 AI started responding - sending audio to caller")
-                                    log(f"   stream_sid={stream_sid}, payload_len={len(payload) if payload else 0}")
+                                # OpenAI sends PCM16 at 24kHz, need to resample to 8kHz and convert to mulaw
+                                import base64
+                                import audioop
                                 
                                 try:
+                                    # Decode base64 PCM16 audio from OpenAI (24kHz)
+                                    pcm16_24khz = base64.b64decode(event.delta)
+                                    
+                                    # Resample from 24kHz to 8kHz (Twilio's rate)
+                                    pcm16_8khz, _ = audioop.ratecv(
+                                        pcm16_24khz,  # input audio data
+                                        2,             # sample width (16-bit = 2 bytes)
+                                        1,             # number of channels (mono)
+                                        24000,         # input sample rate (24kHz)
+                                        8000,          # output sample rate (8kHz)
+                                        None           # state (None for first call)
+                                    )
+                                    
+                                    # Convert PCM16 to mulaw (8-bit)
+                                    mulaw_data = audioop.lin2ulaw(pcm16_8khz, 2)  # 2 = 16-bit width
+                                    
+                                    # Encode mulaw to base64 for Twilio
+                                    mulaw_b64 = base64.b64encode(mulaw_data).decode('utf-8')
+                                    
+                                    # Log first audio chunk to confirm AI is responding
+                                    if timestamp_ms == 0:
+                                        log(f"🔊 AI started responding - sending audio to caller")
+                                        log(f"   stream_sid={stream_sid}, 24kHz_len={len(pcm16_24khz)}, 8kHz_len={len(pcm16_8khz)}, mulaw_len={len(mulaw_data)}")
+                                    
                                     media_msg = {
                                         "event": "media",
                                         "streamSid": stream_sid,
                                         "media": {
-                                            "payload": payload,
+                                            "payload": mulaw_b64,
                                             "timestamp": str(timestamp_ms)
                                         }
                                     }
                                     await websocket.send_text(json.dumps(media_msg))
                                     
+                                    # Track when we last sent audio (for call ending timing)
+                                    last_audio_sent_time = timestamp_ms
+                                    
                                     # Log first few chunks to confirm sending
                                     if timestamp_ms < 100:  # First 5 chunks (100ms)
-                                        log(f"📤 Sent audio chunk to Twilio: timestamp={timestamp_ms}ms, payload_len={len(payload)}")
+                                        log(f"📤 Sent audio chunk to Twilio: timestamp={timestamp_ms}ms, mulaw_len={len(mulaw_data)}")
                                     
-                                    # Increment timestamp (20ms per chunk for 8khz mulaw)
-                                    timestamp_ms += 20
+                                    # Increment timestamp based on mulaw length (8kHz, 1 byte = 1 sample)
+                                    duration_ms = int((len(mulaw_data) / 8000.0) * 1000)
+                                    timestamp_ms += duration_ms
+                                    
                                 except Exception as send_error:
-                                    log(f"❌ Error sending audio to Twilio: {send_error}")
+                                    log(f"❌ Error converting/sending audio to Twilio: {send_error}")
                                     import traceback
                                     traceback.print_exc()
                             else:
@@ -345,6 +431,34 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                     }
                                 )
                                 await openai_ws.response.create()
+                            
+                            elif function_name == "end_call":
+                                reason = args.get("reason", "user_requested")
+                                log(f"📞 AI requesting to end call. Reason: {reason}")
+                                log("⏳ Will end call after AI finishes current response...")
+                                
+                                # Set flag to end call after response is done
+                                end_call_requested = True
+                                end_call_reason = reason
+                                
+                                # Update call log with reason
+                                if call_log:
+                                    update_call_log(stream_sid, status=f"ended_by_ai_{reason}")
+                                
+                                # Tell OpenAI the function executed successfully
+                                await openai_ws.conversation.item.create(
+                                    item={
+                                        "type": "function_call_output",
+                                        "call_id": event.call_id,
+                                        "output": json.dumps({
+                                            "success": True,
+                                            "message": "Confirmed. Finish your goodbye message."
+                                        })
+                                    }
+                                )
+                                
+                                # Trigger the response to continue
+                                await openai_ws.response.create()
                         
                         # Log transcriptions
                         elif event_type == "conversation.item.input_audio_transcription.completed":
@@ -387,6 +501,13 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                     full_transcript = "\n".join(transcript_parts)
                                     update_call_log(stream_sid, transcript=full_transcript)
                             
+                except RuntimeError as e:
+                    if "disconnect message has been received" in str(e) or "WebSocket" in str(e):
+                        log("✅ WebSocket closed gracefully (call ended)")
+                    else:
+                        log(f"❌ Runtime error in openai_to_twilio: {e}")
+                        import traceback
+                        traceback.print_exc()
                 except Exception as e:
                     log(f"❌ Error in openai_to_twilio: {e}")
                     import traceback
@@ -401,9 +522,20 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                 if stream_sid:
                     log("📣 Triggering initial greeting...")
                     try:
-                        # Trigger a response by creating a response item
+                        # Trigger greeting - let the prompt handle the exact wording
+                        await openai_ws.conversation.item.create(
+                            item={
+                                "type": "message",
+                                "role": "user",
+                                "content": [{
+                                    "type": "input_text",
+                                    "text": "A caller has just connected to the phone line. Greet them professionally as instructed."
+                                }]
+                            }
+                        )
+                        # Trigger a response
                         await openai_ws.response.create()
-                        log("✅ Greeting triggered!")
+                        log("✅ Initial greeting triggered!")
                     except Exception as e:
                         log(f"❌ Error sending greeting: {e}")
                 
@@ -478,27 +610,56 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                     if twilio_to_openai._media_count <= 10 or twilio_to_openai._media_count % 50 == 0:
                                         log(f"📦 Media event #{twilio_to_openai._media_count}: payload_len={len(payload) if payload else 0}, has_timestamp={('timestamp' in media_data)}")
                                     
+                                    # Debug: Check payload validity
+                                    if twilio_to_openai._media_count <= 5:
+                                        log(f"🔍 Payload check: payload exists={payload is not None}, payload len={len(payload) if payload else 0}, payload type={type(payload)}")
+                                    
                                     if payload and len(payload) > 0:
-                                        # Twilio sends base64 mulaw payload
-                                        # OpenAI expects base64 mulaw
+                                        # Twilio sends base64 mulaw payload at 8kHz
+                                        # OpenAI input needs PCM16 at 24kHz
                                         try:
+                                            import base64
+                                            import audioop
+                                            
+                                            # Initialize resampling state if needed
+                                            if not hasattr(twilio_to_openai, '_resample_state'):
+                                                twilio_to_openai._resample_state = None
+                                            
+                                            # Decode base64 mulaw from Twilio
+                                            mulaw_data = base64.b64decode(payload)
+                                            
+                                            # Convert mulaw to PCM16
+                                            pcm16_8khz = audioop.ulaw2lin(mulaw_data, 2)  # 2 = 16-bit width
+                                            
+                                            # Resample from 8kHz to 24kHz (OpenAI's preferred rate)
+                                            # Use state to maintain continuity across frames
+                                            pcm16_24khz, twilio_to_openai._resample_state = audioop.ratecv(
+                                                pcm16_8khz,                      # input audio data
+                                                2,                               # sample width (16-bit = 2 bytes)
+                                                1,                               # number of channels (mono)
+                                                8000,                            # input sample rate (8kHz)
+                                                24000,                           # output sample rate (24kHz)
+                                                twilio_to_openai._resample_state # state for continuity
+                                            )
+                                            
+                                            # Encode to base64 for OpenAI
+                                            pcm16_b64 = base64.b64encode(pcm16_24khz).decode('utf-8')
+                                            
                                             # Append audio to buffer
                                             await openai_ws.send({
                                                 "type": "input_audio_buffer.append",
-                                                "audio": payload
+                                                "audio": pcm16_b64
                                             })
                                             
-                                            # Commit every frame for real-time processing
-                                            # Batch was causing delays - reverting to per-frame commits
-                                            await openai_ws.send({
-                                                "type": "input_audio_buffer.commit"
-                                            })
+                                            # DO NOT COMMIT MANUALLY - Let OpenAI's server VAD handle it!
+                                            # Manual commits cause "buffer too small" errors
+                                            # OpenAI will auto-commit when VAD detects speech boundaries
                                             
                                             # Log first few frames to confirm processing
                                             if twilio_to_openai._media_count <= 10:
-                                                log(f"🎤 Audio frame #{twilio_to_openai._media_count} received and committed ({len(payload)} bytes) ✅")
+                                                log(f"🎤 Audio frame #{twilio_to_openai._media_count}: mulaw={len(mulaw_data)}b, pcm16_8k={len(pcm16_8khz)}b, pcm16_24k={len(pcm16_24khz)}b → appended ✅")
                                         except Exception as audio_error:
-                                            log(f"⚠️ Error sending audio to OpenAI: {audio_error}")
+                                            log(f"⚠️ Error converting/sending audio to OpenAI: {audio_error}")
                                             import traceback
                                             traceback.print_exc()
                                     else:
@@ -527,6 +688,13 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 "type": "input_audio_buffer.commit"
                             })
                                 
+                except RuntimeError as e:
+                    if "disconnect message has been received" in str(e):
+                        log("✅ WebSocket closed gracefully (call ended)")
+                    else:
+                        log(f"❌ Runtime error in twilio_to_openai: {e}")
+                        import traceback
+                        traceback.print_exc()
                 except Exception as e:
                     log(f"❌ Error in twilio_to_openai: {e}")
                     import traceback

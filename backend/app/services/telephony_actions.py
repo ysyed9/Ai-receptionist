@@ -188,3 +188,30 @@ def schedule_appointment(
     finally:
         db.close()
 
+
+async def end_call(reason: str, websocket) -> dict:
+    """
+    End the call by closing the WebSocket connection.
+    This terminates the Media Stream and ends the call.
+    
+    Args:
+        reason: Why the call is being ended (e.g., "conversation_complete", "spam_detected", "user_requested")
+        websocket: The Twilio WebSocket connection
+    
+    Returns:
+        dict with status and reason
+    """
+    print(f"📞 AI ending call. Reason: {reason}")
+    
+    # Close the WebSocket to end the Media Stream and call
+    try:
+        await websocket.close(code=1000, reason=reason)
+    except Exception as e:
+        print(f"❌ Error closing WebSocket: {e}")
+    
+    return {
+        "success": True,
+        "action": "call_ended",
+        "reason": reason
+    }
+
