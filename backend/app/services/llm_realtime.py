@@ -68,7 +68,7 @@ When someone connects, simply say "Hello" and wait for them to speak.
 If a caller asks business-related questions, check RAG memory using function: rag_search.
 
 Allowed actions: {json.dumps(business.allowed_actions)}""",
-                    "voice": "nova",
+                    "voice": "shimmer",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {"model": "whisper-1"},
