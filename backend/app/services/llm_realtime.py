@@ -175,6 +175,8 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                         # Track response start
                         if event_type == "response.created":
                             log(f"🎯 AI response started generating")
+                            # Reset timestamp for new response
+                            timestamp_ms = 0
                         
                         elif event_type == "response.done":
                             log(f"✅ AI response complete")
@@ -187,18 +189,36 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 # Log first audio chunk to confirm AI is responding
                                 if timestamp_ms == 0:
                                     log(f"🔊 AI started responding - sending audio to caller")
+                                    log(f"   stream_sid={stream_sid}, payload_len={len(payload) if payload else 0}")
                                 
-                                await websocket.send_text(json.dumps({
-                                    "event": "media",
-                                    "streamSid": stream_sid,
-                                    "media": {
-                                        "payload": payload,
-                                        "timestamp": str(timestamp_ms)
+                                try:
+                                    media_msg = {
+                                        "event": "media",
+                                        "streamSid": stream_sid,
+                                        "media": {
+                                            "payload": payload,
+                                            "timestamp": str(timestamp_ms)
+                                        }
                                     }
-                                }))
-                                
-                                # Increment timestamp (20ms per chunk for 8khz mulaw)
-                                timestamp_ms += 20
+                                    await websocket.send_text(json.dumps(media_msg))
+                                    
+                                    # Log first few chunks to confirm sending
+                                    if timestamp_ms < 100:  # First 5 chunks (100ms)
+                                        log(f"📤 Sent audio chunk to Twilio: timestamp={timestamp_ms}ms, payload_len={len(payload)}")
+                                    
+                                    # Increment timestamp (20ms per chunk for 8khz mulaw)
+                                    timestamp_ms += 20
+                                except Exception as send_error:
+                                    log(f"❌ Error sending audio to Twilio: {send_error}")
+                                    import traceback
+                                    traceback.print_exc()
+                            else:
+                                if not stream_sid:
+                                    if timestamp_ms == 0:
+                                        log(f"⚠️ Cannot send audio: stream_sid is None")
+                                elif not hasattr(event, 'delta') or not event.delta:
+                                    if timestamp_ms == 0:
+                                        log(f"⚠️ Cannot send audio: event.delta is missing or empty")
                         
                         elif event_type == "response.audio_transcript.delta":
                             # AI is generating audio transcript (what it's saying)
@@ -468,15 +488,15 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                                 "audio": payload
                                             })
                                             
-                                            # Batch commits: commit every 5 frames (100ms) instead of every frame
-                                            # This gives OpenAI more context for transcription
-                                            if twilio_to_openai._media_count % 5 == 0:
-                                                await openai_ws.send({
-                                                    "type": "input_audio_buffer.commit"
-                                                })
-                                                # Log occasionally
-                                                if twilio_to_openai._media_count <= 10:
-                                                    log(f"🎤 Batched {twilio_to_openai._media_count} audio frames and committed to OpenAI ✅")
+                                            # Commit every frame for real-time processing
+                                            # Batch was causing delays - reverting to per-frame commits
+                                            await openai_ws.send({
+                                                "type": "input_audio_buffer.commit"
+                                            })
+                                            
+                                            # Log first few frames to confirm processing
+                                            if twilio_to_openai._media_count <= 10:
+                                                log(f"🎤 Audio frame #{twilio_to_openai._media_count} received and committed ({len(payload)} bytes) ✅")
                                         except Exception as audio_error:
                                             log(f"⚠️ Error sending audio to OpenAI: {audio_error}")
                                             import traceback
