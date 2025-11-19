@@ -87,11 +87,12 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Connect>
+    <Start>
         <Stream url="{stream_url}">
             <Parameter name="business_id" value="{business.id}" />
         </Stream>
-    </Connect>
+    </Start>
+    <Pause length="3600"/>
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")

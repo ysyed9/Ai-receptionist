@@ -393,6 +393,12 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 data = json.loads(message["text"])
                                 event = data.get("event")
                                 
+                                # Log all events for debugging
+                                if event not in ["media", "connected", "start", "stop"]:
+                                    log(f"📬 Twilio event: {event}")
+                                    if event in ["dtmf", "mark"]:
+                                        log(f"   Data: {json.dumps(data)[:200]}")
+                                
                                 if event == "connected":
                                     log("🔗 Twilio connected")
                                     continue
@@ -430,6 +436,16 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 
                                 if event == "media":
                                     payload = data.get("media", {}).get("payload", "")
+                                    media_data = data.get("media", {})
+                                    
+                                    # Log ALL media events to debug
+                                    if not hasattr(twilio_to_openai, '_media_count'):
+                                        twilio_to_openai._media_count = 0
+                                    twilio_to_openai._media_count += 1
+                                    
+                                    if twilio_to_openai._media_count <= 10 or twilio_to_openai._media_count % 50 == 0:
+                                        log(f"📦 Media event #{twilio_to_openai._media_count}: payload_len={len(payload) if payload else 0}, has_timestamp={('timestamp' in media_data)}")
+                                    
                                     if payload and len(payload) > 0:
                                         # Twilio sends base64 mulaw payload
                                         # OpenAI expects base64 mulaw
@@ -441,19 +457,18 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                             await openai_ws.send({
                                                 "type": "input_audio_buffer.commit"
                                             })
+                                            
                                             # Log first few frames to confirm audio is being received
-                                            if not hasattr(twilio_to_openai, '_audio_frame_count'):
-                                                twilio_to_openai._audio_frame_count = 0
-                                            twilio_to_openai._audio_frame_count += 1
-                                            if twilio_to_openai._audio_frame_count <= 5:
-                                                log(f"🎤 Audio frame #{twilio_to_openai._audio_frame_count} received from Twilio ({len(payload)} bytes) - sent to OpenAI")
+                                            if twilio_to_openai._media_count <= 5:
+                                                log(f"🎤 Audio frame #{twilio_to_openai._media_count} received from Twilio ({len(payload)} bytes) - sent to OpenAI ✅")
                                         except Exception as audio_error:
                                             log(f"⚠️ Error sending audio to OpenAI: {audio_error}")
                                             import traceback
                                             traceback.print_exc()
                                     else:
-                                        if payload == "":
-                                            log(f"⚠️ Received empty audio payload from Twilio")
+                                        if not payload or len(payload) == 0:
+                                            if twilio_to_openai._media_count <= 5:
+                                                log(f"⚠️ Media event #{twilio_to_openai._media_count}: Received empty/null payload from Twilio")
                                     continue
                                     
                             except json.JSONDecodeError:

@@ -87,10 +87,17 @@ def end_call_log(stream_sid: str):
         if not call_log:
             return None
         
-        call_log.end_time = datetime.utcnow()
+        from datetime import timezone
+        call_log.end_time = datetime.now(timezone.utc)
         call_log.status = "completed"
         
         if call_log.start_time:
+            # Ensure both datetimes are timezone-aware
+            if call_log.start_time.tzinfo is None:
+                call_log.start_time = call_log.start_time.replace(tzinfo=timezone.utc)
+            if call_log.end_time.tzinfo is None:
+                call_log.end_time = call_log.end_time.replace(tzinfo=timezone.utc)
+            
             duration = (call_log.end_time - call_log.start_time).total_seconds()
             call_log.duration_seconds = duration
         
