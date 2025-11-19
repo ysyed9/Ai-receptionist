@@ -5,6 +5,8 @@ import logging
 from openai import AsyncOpenAI
 from app.services.rag_service import search_knowledge
 from app.services.business_service import get_business_by_id
+from app.services.call_logging import create_call_log, update_call_log, end_call_log
+from app.services.telephony_actions import send_sms, transfer_call, schedule_appointment
 from app.db import SessionLocal
 from fastapi import WebSocket
 
@@ -41,11 +43,23 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
     # Track Twilio stream
     stream_sid = initial_stream_sid
     twilio_connected = asyncio.Event()
+    call_log = None
+    transcript_parts = []
+    caller_number = None
+    called_number = None
     
     # If we already have stream_sid, mark as connected
     if stream_sid:
         log(f"✅ Twilio already connected (streamSid={stream_sid})")
         twilio_connected.set()
+        # Create call log
+        call_log = create_call_log(
+            business_id=business_id,
+            stream_sid=stream_sid,
+            caller_number=caller_number,
+            called_number=called_number
+        )
+        log(f"📝 Call log created: {call_log.id}")
 
     try:
         log("🔌 Connecting to OpenAI Realtime API...")
@@ -82,7 +96,7 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                         {
                             "type": "function",
                             "name": "rag_search",
-                            "description": "Search business knowledge base",
+                            "description": "Search business knowledge base for information",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -96,6 +110,34 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                             "name": "transfer_call",
                             "description": "Transfer call to forwarding number",
                             "parameters": {"type": "object", "properties": {}}
+                        },
+                        {
+                            "type": "function",
+                            "name": "send_sms",
+                            "description": "Send SMS text message to caller",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "to_number": {"type": "string", "description": "Phone number to send SMS to"},
+                                    "message": {"type": "string", "description": "SMS message content"}
+                                },
+                                "required": ["to_number", "message"]
+                            }
+                        },
+                        {
+                            "type": "function",
+                            "name": "schedule_appointment",
+                            "description": "Schedule an appointment for the caller",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "appointment_date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                                    "appointment_time": {"type": "string", "description": "Time in HH:MM format"},
+                                    "service_type": {"type": "string", "description": "Type of service (optional)"},
+                                    "notes": {"type": "string", "description": "Additional notes (optional)"}
+                                },
+                                "required": ["appointment_date", "appointment_time"]
+                            }
                         }
                     ],
                     "tool_choice": "auto"
@@ -144,8 +186,22 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                             function_name = event.name
                             args = json.loads(event.arguments)
                             
+                            # Log action
+                            if call_log:
+                                update_call_log(stream_sid, action=function_name)
+                            
                             if function_name == "rag_search":
-                                results = search_knowledge(business_id, args.get("query", ""))
+                                query = args.get("query", "")
+                                log(f"🔍 RAG search: {query}")
+                                results = search_knowledge(business_id, query)
+                                
+                                # Log RAG query in metadata
+                                if call_log:
+                                    update_call_log(
+                                        stream_sid,
+                                        metadata={"rag_queries": [query]}
+                                    )
+                                
                                 await openai_ws.conversation.item.create(
                                     item={
                                         "type": "function_call_output",
@@ -159,19 +215,93 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                 await openai_ws.response.create()
                             
                             elif function_name == "transfer_call":
+                                log(f"📞 Transferring call...")
                                 if business.forwarding_number:
+                                    transfer_result = transfer_call(stream_sid, business.forwarding_number)
                                     await websocket.send_text(json.dumps({
-                                        "action": "transfer",
-                                        "number": business.forwarding_number
+                                        "event": "transfer",
+                                        "streamSid": stream_sid,
+                                        "transfer": {
+                                            "to": business.forwarding_number
+                                        }
                                     }))
+                                    if call_log:
+                                        update_call_log(stream_sid, status="transferred")
+                            
+                            elif function_name == "send_sms":
+                                to_number = args.get("to_number")
+                                message = args.get("message")
+                                log(f"📱 Sending SMS to {to_number}: {message[:50]}...")
+                                
+                                sms_result = send_sms(to_number, message)
+                                
+                                await openai_ws.conversation.item.create(
+                                    item={
+                                        "type": "function_call_output",
+                                        "call_id": event.call_id,
+                                        "output": json.dumps({
+                                            "success": sms_result.get("success", False),
+                                            "message": "SMS sent successfully" if sms_result.get("success") else f"Failed: {sms_result.get('error', 'Unknown error')}"
+                                        })
+                                    }
+                                )
+                                await openai_ws.response.create()
+                            
+                            elif function_name == "schedule_appointment":
+                                appointment_date = args.get("appointment_date")
+                                appointment_time = args.get("appointment_time")
+                                service_type = args.get("service_type")
+                                notes = args.get("notes")
+                                
+                                log(f"📅 Scheduling appointment: {appointment_date} at {appointment_time}")
+                                
+                                appointment_result = schedule_appointment(
+                                    business_id=business_id,
+                                    caller_number=caller_number or "unknown",
+                                    appointment_date=appointment_date,
+                                    appointment_time=appointment_time,
+                                    service_type=service_type,
+                                    notes=notes
+                                )
+                                
+                                await openai_ws.conversation.item.create(
+                                    item={
+                                        "type": "function_call_output",
+                                        "call_id": event.call_id,
+                                        "output": json.dumps({
+                                            "success": appointment_result.get("success", False),
+                                            "message": appointment_result.get("message", "Appointment scheduled"),
+                                            "appointment": appointment_result.get("appointment", {})
+                                        })
+                                    }
+                                )
+                                await openai_ws.response.create()
                         
                         # Log transcriptions
                         elif event_type == "conversation.item.input_audio_transcription.completed":
-                            log(f"[USER]: {event.transcript}")
+                            user_text = event.transcript
+                            log(f"[USER]: {user_text}")
+                            transcript_parts.append(f"USER: {user_text}")
+                            
+                            # Update call log with transcript
+                            if call_log and stream_sid:
+                                full_transcript = "\n".join(transcript_parts)
+                                update_call_log(stream_sid, transcript=full_transcript)
+                        
                         elif event_type == "response.text.delta":
-                            print(f"[AI]: {event.delta}", end="", flush=True)
+                            ai_text = event.delta
+                            print(f"[AI]: {ai_text}", end="", flush=True)
+                            # Don't add to transcript yet - wait for done
+                        
                         elif event_type == "response.text.done":
+                            ai_full_text = event.text if hasattr(event, 'text') else ""
                             print()
+                            if ai_full_text:
+                                transcript_parts.append(f"AI: {ai_full_text}")
+                                # Update call log with transcript
+                                if call_log and stream_sid:
+                                    full_transcript = "\n".join(transcript_parts)
+                                    update_call_log(stream_sid, transcript=full_transcript)
                             
                 except Exception as e:
                     log(f"❌ Error in openai_to_twilio: {e}")
@@ -218,17 +348,43 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                         stream_sid = data.get('start', {}).get('streamSid') or data.get('streamSid')
                                         log(f"▶️ Twilio stream started (streamSid={stream_sid})")
                                         twilio_connected.set()
+                                        
+                                        # Extract caller/called numbers if available
+                                        start_data = data.get('start', {})
+                                        caller_number = start_data.get('callerNumber') or data.get('callerNumber')
+                                        called_number = start_data.get('calledNumber') or data.get('calledNumber')
+                                        
+                                        # Create call log if not already created
+                                        if not call_log:
+                                            call_log = create_call_log(
+                                                business_id=business_id,
+                                                stream_sid=stream_sid,
+                                                caller_number=caller_number,
+                                                called_number=called_number
+                                            )
+                                            log(f"📝 Call log created: {call_log.id}")
                                     continue
                                 
                                 if event == "stop":
                                     log("⏹ Twilio stream stopped")
+                                    # End call log
+                                    if call_log and stream_sid:
+                                        end_call_log(stream_sid)
+                                        log(f"📝 Call log ended: {call_log.id}")
                                     break
                                 
                                 if event == "media":
                                     payload = data.get("media", {}).get("payload", "")
                                     if payload:
-                                        # Payload is base64 from Twilio
-                                        await openai_ws.input_audio_buffer.append(audio=payload)
+                                        # Twilio sends base64 mulaw payload
+                                        # OpenAI expects base64 mulaw
+                                        await openai_ws.send({
+                                            "type": "input_audio_buffer.append",
+                                            "audio": payload
+                                        })
+                                        await openai_ws.send({
+                                            "type": "input_audio_buffer.commit"
+                                        })
                                     continue
                                     
                             except json.JSONDecodeError:
@@ -243,7 +399,13 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                             import base64
                             audio_bytes = message["bytes"]
                             audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                            await openai_ws.input_audio_buffer.append(audio=audio_b64)
+                            await openai_ws.send({
+                                "type": "input_audio_buffer.append",
+                                "audio": audio_b64
+                            })
+                            await openai_ws.send({
+                                "type": "input_audio_buffer.commit"
+                            })
                                 
                 except Exception as e:
                     log(f"❌ Error in twilio_to_openai: {e}")
@@ -252,15 +414,26 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
 
             # Run both tasks concurrently
             log("🚀 Starting audio bridge...")
-            await asyncio.gather(
-                twilio_to_openai(),
-                openai_to_twilio()
-            )
+            try:
+                await asyncio.gather(
+                    twilio_to_openai(),
+                    openai_to_twilio()
+                )
+            finally:
+                # Ensure call log is ended
+                if call_log and stream_sid:
+                    end_call_log(stream_sid)
+                    log(f"📝 Call log finalized: {call_log.id}")
+            
             log("✅ Audio bridge completed")
             
     except Exception as e:
         log(f"❌ Error in realtime session: {e}")
         import traceback
         traceback.print_exc()
+        # End call log on error
+        if call_log and stream_sid:
+            end_call_log(stream_sid)
+            update_call_log(stream_sid, status="failed")
         await websocket.close()
         

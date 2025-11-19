@@ -6,7 +6,7 @@ import os
 
 from app.routers import business, rag, call, stream
 from app.db import Base, engine
-from app.models import business as business_model, document  # ensure models are imported
+from app.models import business as business_model, document, call_log  # ensure models are imported
 from app.services.business_sync import sync_all_businesses
 
 
