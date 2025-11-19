@@ -1,0 +1,32 @@
+# Business Configuration
+name: "Spark Dental"
+slug: "spark-dental"
+phone_number: "+15176284976"
+forwarding_number: "+18885559999"
+
+# AI Personality
+tone: "friendly and confident"
+
+# Business Hours (optional)
+business_hours:
+  mon: "9am-5pm"
+  tue: "9am-5pm"
+  wed: "9am-5pm"
+  thu: "9am-5pm"
+  fri: "9am-5pm"
+  sat: "closed"
+  sun: "closed"
+
+# Allowed Actions
+allowed_actions:
+  sms: true
+  transfer: true
+  booking: true
+  rag_search: true
+
+# Appointment System (optional)
+appointment_credentials:
+  system: "calendly"
+  api_key: ""
+  calendar_url: ""
+

@@ -7,11 +7,19 @@ import os
 from app.routers import business, rag, call, stream
 from app.db import Base, engine
 from app.models import business as business_model, document  # ensure models are imported
+from app.services.business_sync import sync_all_businesses
 
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Receptionist Backend")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Run business sync on startup"""
+    print("\n🚀 Starting AI Receptionist Backend...")
+    sync_all_businesses()
 
 # Add CORS middleware for WebSocket testing
 app.add_middleware(

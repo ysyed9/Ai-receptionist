@@ -1,0 +1,36 @@
+Spark Dental Pricing Guide
+
+ROUTINE SERVICES
+- New patient exam: $89
+- Cleaning (prophylaxis): $120-150
+- Dental X-rays: $75-150
+- Fluoride treatment: $35
+
+RESTORATIVE
+- Fillings: $150-300 per tooth
+- Root canal: $800-1,500
+- Crown: $1,000-1,800
+- Extraction: $150-400
+
+COSMETIC
+- Teeth whitening (in-office): $500
+- Teeth whitening (take-home kit): $300
+- Veneer: $1,000-2,500 per tooth
+- Bonding: $300-600 per tooth
+
+IMPLANTS
+- Single tooth implant: $3,000-5,000
+- Implant-supported denture: $15,000-30,000
+- Free implant consultation
+
+INSURANCE
+- We accept most PPO insurance plans
+- We are in-network with: Delta Dental, MetLife, Cigna, Aetna
+- We file claims for you
+- Payment plans available
+
+PAYMENT OPTIONS
+- Cash, credit cards, CareCredit financing
+- 0% interest payment plans for treatment over $1,000
+- 10% discount for cash payment on major work
+
