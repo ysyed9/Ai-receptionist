@@ -27,6 +27,7 @@ name: "Your Business Name"
 slug: "your-business-name"
 phone_number: "+15551234567"
 forwarding_number: "+15559876543"
+website_url: "https://yourbusiness.com/"
 
 tone: "friendly and professional"
 
@@ -49,6 +50,9 @@ appointment_credentials:
   system: "calendly"
   api_key: ""
   calendar_url: ""
+
+# Auto-crawl website on sync (optional)
+auto_crawl_website: true
 ```
 
 ### `prompt.md` (Required)
@@ -86,8 +90,19 @@ Any `.txt` or `.md` files in the `knowledge/` folder will be automatically inges
 1. **On Backend Startup**: The backend automatically reads all folders in `businesses/`
 2. **Creates or Updates**: Each business is created (if new) or updated (if exists)
 3. **Phone Number is Key**: Businesses are matched by phone number
-4. **Knowledge Ingestion**: All files in `knowledge/` are ingested into the RAG vector database
-5. **Database is Source of Truth**: At runtime, the backend uses the database (not files)
+4. **Website Crawling**: If `auto_crawl_website: true` and `website_url` is set, the website is automatically crawled and ingested
+5. **Knowledge Ingestion**: All files in `knowledge/` are ingested into the RAG vector database
+6. **Database is Source of Truth**: At runtime, the backend uses the database (not files)
+
+## 🌐 Auto Website Crawling
+
+If you set `auto_crawl_website: true` and provide a `website_url` in your `config.yaml`, the system will:
+- **Automatically crawl** the website on every backend startup
+- **Extract text content** from all pages
+- **Ingest into RAG** so the AI can answer questions about your website content
+- **No manual updates needed** - just restart backend to refresh website content
+
+This is perfect for keeping your AI receptionist up-to-date with your latest website information!
 
 ## ✅ Adding a New Business
 

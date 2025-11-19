@@ -1,0 +1,36 @@
+# Business Configuration
+name: "Midtown Family Dentistry of Dallas"
+slug: "midtowndentistrydallas"
+phone_number: "+15176284976"
+forwarding_number: "+14692900609"
+website_url: "https://www.midtowndentistrydallas.com/"
+
+# AI Personality
+tone: "warm, welcoming, and family-friendly"
+
+# Business Hours
+business_hours:
+  mon: "1pm-6pm"
+  tue: "10am-6pm"
+  wed: "10am-6pm"
+  thu: "10am-6pm"
+  fri: "10am-6pm"
+  sat: "10am-2pm"
+  sun: "closed"
+
+# Allowed Actions
+allowed_actions:
+  sms: true
+  transfer: true
+  booking: true
+  rag_search: true
+
+# Appointment System
+appointment_credentials:
+  system: "custom"
+  api_key: ""
+  calendar_url: ""
+
+# Auto-crawl website on sync
+auto_crawl_website: true
+

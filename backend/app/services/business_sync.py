@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from app.models.business import Business
 from app.services.rag_service import ingest_text
+from app.services.crawler import crawl_website
 from app.db import SessionLocal
 
 
@@ -104,6 +105,32 @@ def sync_business_to_db(db: Session, config: dict, prompt: str) -> Business:
     return business
 
 
+def crawl_and_ingest_website(db: Session, business_id: int, website_url: str):
+    """Crawl website and ingest content into RAG system"""
+    
+    print(f"   🌐 Crawling website: {website_url}")
+    
+    try:
+        content = crawl_website(website_url)
+        
+        if content.startswith("ERROR"):
+            print(f"      ❌ Failed to crawl: {content}")
+            return
+        
+        # Ingest the crawled content
+        ingest_text(
+            db=db,
+            business_id=business_id,
+            text=content,
+            source=f"website:{website_url}"
+        )
+        
+        print(f"      ✅ Website content ingested ({len(content)} characters)")
+        
+    except Exception as e:
+        print(f"      ❌ Error crawling website: {e}")
+
+
 def ingest_knowledge_files(db: Session, business_id: int, knowledge_files: list):
     """Ingest all knowledge files into RAG system"""
     
@@ -170,7 +197,11 @@ def sync_all_businesses():
             print(f"   ✅ Business ID: {business.id}")
             print(f"   📞 Phone: {business.phone_number}")
             
-            # Ingest knowledge
+            # Auto-crawl website if enabled
+            if config.get('auto_crawl_website') and config.get('website_url'):
+                crawl_and_ingest_website(db, business.id, config['website_url'])
+            
+            # Ingest knowledge files
             ingest_knowledge_files(db, business.id, knowledge_files)
             
             print()

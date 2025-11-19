@@ -67,6 +67,7 @@ name: "My Restaurant"
 slug: "my-restaurant"
 phone_number: "+15551234567"
 forwarding_number: "+15559876543"
+website_url: "https://myrestaurant.com/"
 
 tone: "warm and welcoming"
 
@@ -88,6 +89,9 @@ allowed_actions:
 appointment_credentials:
   system: "opentable"
   api_key: ""
+
+# Auto-crawl website (optional but recommended!)
+auto_crawl_website: true
 ```
 
 ### Step 3: Create `prompt.md`
@@ -153,25 +157,42 @@ Ask questions covered in your knowledge files:
 
 The AI should search the knowledge base and provide accurate answers!
 
-## 📚 Example: Spark Dental (Current)
+## 🌐 Auto Website Crawling (NEW!)
+
+You can now automatically crawl and ingest website content! Just add to your `config.yaml`:
+
+```yaml
+website_url: "https://yourbusiness.com/"
+auto_crawl_website: true
+```
+
+On backend startup, the system will:
+- ✅ Crawl your entire website
+- ✅ Extract all text content
+- ✅ Ingest into RAG knowledge base
+- ✅ Keep AI up-to-date with latest website info
+
+**No manual knowledge files needed!** Just point to your website.
+
+## 📚 Example: Midtown Family Dentistry (Current)
 
 **Phone**: (517) 628-4976
 
-**Knowledge Base**:
-- Services (general, cosmetic, implants, emergency)
-- Pricing (routine, restorative, cosmetic, implants)
-- FAQ (hours, insurance, payment plans, etc.)
+**Website**: https://www.midtowndentistrydallas.com/
+
+**Auto-Crawled**: Yes! (14,103 characters ingested from website)
 
 **AI Personality**:
-- Warm and welcoming
-- Professional and reassuring
-- Knowledgeable about dental procedures
-- Empathetic to dental anxiety
+- Warm, welcoming, and family-friendly
+- Bilingual (English/Spanish)
+- Patient with anxious callers
+- Emphasizes same-day appointments and flexible hours
 
 Try calling and ask:
-- "Do you do teeth whitening?"
-- "How much does a cleaning cost?"
+- "What are your hours?"
+- "Do you see kids?"
 - "Do you accept my insurance?"
+- "Can I get a same-day appointment?"
 
 ## 🎯 Best Practices
 
