@@ -24,8 +24,8 @@ class CallLog(Base):
     # Status
     status = Column(String(50), default="active")  # active, completed, transferred, failed
     
-    # Metadata
-    metadata = Column(JSON)  # Additional data like RAG queries, function calls, etc.
+    # Extra Metadata (note: 'metadata' is reserved by SQLAlchemy)
+    extra_metadata = Column(JSON)  # Additional data like RAG queries, function calls, etc.
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

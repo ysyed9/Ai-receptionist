@@ -25,7 +25,7 @@ def create_call_log(
             status="active",
             transcript="",
             actions_taken=[],
-            metadata={}
+            extra_metadata={}
         )
         db.add(call_log)
         db.commit()
@@ -62,15 +62,15 @@ def update_call_log(
             call_log.status = status
         
         if metadata:
-            if call_log.metadata is None:
-                call_log.metadata = {}
+            if call_log.extra_metadata is None:
+                call_log.extra_metadata = {}
             # Merge metadata - handle arrays specially
             for key, value in metadata.items():
-                if key in call_log.metadata and isinstance(call_log.metadata[key], list) and isinstance(value, list):
+                if key in call_log.extra_metadata and isinstance(call_log.extra_metadata[key], list) and isinstance(value, list):
                     # Merge arrays
-                    call_log.metadata[key] = list(set(call_log.metadata[key] + value))
+                    call_log.extra_metadata[key] = list(set(call_log.extra_metadata[key] + value))
                 else:
-                    call_log.metadata[key] = value
+                    call_log.extra_metadata[key] = value
         
         db.commit()
         db.refresh(call_log)

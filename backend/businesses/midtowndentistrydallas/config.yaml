@@ -27,9 +27,9 @@ allowed_actions:
 
 # Appointment System
 appointment_credentials:
-  system: "custom"
+  system: "leadconnector"
   api_key: ""
-  calendar_url: ""
+  booking_url: "https://api.leadconnectorhq.com/widget/booking/ntRZ2CWaPWexCtIFYxex"
 
 # Auto-crawl website on sync
 auto_crawl_website: true

@@ -77,7 +77,9 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
 Tone: {business.tone}
 Instructions: {business.instructions}
 
-When someone connects, simply say "Hello" and wait for them to speak.
+When someone connects, greet them warmly and naturally, then be ready to help with whatever they need.
+
+IMPORTANT: After greeting, you MUST actively listen and respond to whatever the caller says. Do not just greet and wait silently - actually help them with their questions or requests.
 
 If a caller asks business-related questions, check RAG memory using function: rag_search.
 
@@ -127,16 +129,18 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                         {
                             "type": "function",
                             "name": "schedule_appointment",
-                            "description": "Schedule an appointment for the caller",
+                            "description": "Schedule an appointment for the caller. You MUST ask for the caller's name and email before scheduling. Collect all required information: name, email, date, time, and optionally service type and notes.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "appointment_date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
-                                    "appointment_time": {"type": "string", "description": "Time in HH:MM format"},
-                                    "service_type": {"type": "string", "description": "Type of service (optional)"},
-                                    "notes": {"type": "string", "description": "Additional notes (optional)"}
+                                    "appointment_date": {"type": "string", "description": "Date in YYYY-MM-DD format (e.g., 2024-12-25)"},
+                                    "appointment_time": {"type": "string", "description": "Time in HH:MM format (e.g., 14:30 for 2:30 PM)"},
+                                    "caller_name": {"type": "string", "description": "Caller's full name (REQUIRED - ask for this before scheduling)"},
+                                    "caller_email": {"type": "string", "description": "Caller's email address (REQUIRED - ask for this before scheduling)"},
+                                    "service_type": {"type": "string", "description": "Type of service or appointment reason (optional, e.g., 'cleaning', 'consultation', 'emergency')"},
+                                    "notes": {"type": "string", "description": "Additional notes or special requests (optional)"}
                                 },
-                                "required": ["appointment_date", "appointment_time"]
+                                "required": ["appointment_date", "appointment_time", "caller_name", "caller_email"]
                             }
                         }
                     ],
@@ -250,19 +254,34 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                             elif function_name == "schedule_appointment":
                                 appointment_date = args.get("appointment_date")
                                 appointment_time = args.get("appointment_time")
+                                caller_name = args.get("caller_name")
+                                caller_email = args.get("caller_email")
                                 service_type = args.get("service_type")
                                 notes = args.get("notes")
                                 
-                                log(f"📅 Scheduling appointment: {appointment_date} at {appointment_time}")
+                                log(f"📅 Scheduling appointment: {appointment_date} at {appointment_time} for {caller_name} ({caller_email})")
+                                
+                                # Get call_log_id if available
+                                call_log_id = None
+                                if call_log:
+                                    call_log_id = call_log.id
                                 
                                 appointment_result = schedule_appointment(
                                     business_id=business_id,
                                     caller_number=caller_number or "unknown",
                                     appointment_date=appointment_date,
                                     appointment_time=appointment_time,
+                                    caller_name=caller_name,
+                                    caller_email=caller_email,
                                     service_type=service_type,
-                                    notes=notes
+                                    notes=notes,
+                                    call_log_id=call_log_id
                                 )
+                                
+                                # Prepare response message
+                                response_message = appointment_result.get("message", "Appointment scheduled")
+                                if appointment_result.get("booking_url"):
+                                    response_message += f" I'll send you a booking link at {caller_email} to confirm the details."
                                 
                                 await openai_ws.conversation.item.create(
                                     item={
@@ -270,8 +289,10 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                         "call_id": event.call_id,
                                         "output": json.dumps({
                                             "success": appointment_result.get("success", False),
-                                            "message": appointment_result.get("message", "Appointment scheduled"),
-                                            "appointment": appointment_result.get("appointment", {})
+                                            "message": response_message,
+                                            "appointment": appointment_result.get("appointment", {}),
+                                            "booking_url": appointment_result.get("booking_url"),
+                                            "error": appointment_result.get("error") if not appointment_result.get("success") else None
                                         })
                                     }
                                 )
@@ -315,15 +336,9 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                 
                 # Send greeting immediately if stream is already ready
                 if stream_sid:
-                    log("📣 Sending greeting trigger...")
+                    log("📣 Triggering initial greeting...")
                     try:
-                        await openai_ws.conversation.item.create(
-                            item={
-                                "type": "message",
-                                "role": "user",
-                                "content": [{"type": "input_text", "text": "Hello"}]
-                            }
-                        )
+                        # Trigger a response by creating a response item
                         await openai_ws.response.create()
                         log("✅ Greeting triggered!")
                     except Exception as e:
