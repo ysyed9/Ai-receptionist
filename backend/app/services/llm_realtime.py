@@ -1,16 +1,13 @@
 import os
 import json
 import asyncio
-import sys
 import logging
 from openai import AsyncOpenAI
 from app.services.rag_service import search_knowledge
 from app.services.business_service import get_business_by_id
-from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from fastapi import WebSocket
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -18,22 +15,18 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def log(msg):
-    """Log with both logger and print"""
     logger.info(msg)
     print(msg, flush=True)
 
 
-async def handle_realtime_audio(websocket: WebSocket, business_id: int):
+async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_stream_sid: str = None):
     """
-    Main pipeline:
-       Twilio WS <-> this function <-> OpenAI Realtime WS
+    Main pipeline: Twilio WS <-> this function <-> OpenAI Realtime WS
     """
     
-    log(f"🔄 Twilio WS connected → Starting GPT Realtime session for business_id={business_id}...")
+    log(f"🔄 Starting GPT Realtime session for business_id={business_id}...")
 
-    # -----------------------------
-    # 1. Load business settings
-    # -----------------------------
+    # Load business settings
     db = SessionLocal()
     business = get_business_by_id(db, business_id)
     db.close()
@@ -45,38 +38,40 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int):
     
     log(f"✅ Business loaded: {business.name}")
 
-    # -----------------------------
-    # 2. Open GPT Realtime Session
-    # -----------------------------
+    # Track Twilio stream
+    stream_sid = initial_stream_sid
+    twilio_connected = asyncio.Event()
+    
+    # If we already have stream_sid, mark as connected
+    if stream_sid:
+        log(f"✅ Twilio already connected (streamSid={stream_sid})")
+        twilio_connected.set()
+
     try:
         log("🔌 Connecting to OpenAI Realtime API...")
         async with client.beta.realtime.connect(
             model=os.getenv("OPENAI_MODEL_REALTIME", "gpt-4o-realtime-preview-2024-12-17")
         ) as openai_ws:
-            log("🤖 GPT Realtime session successfully established!")
+            log("🤖 GPT Realtime session established!")
             
             # Configure session
+            log("📝 Configuring OpenAI session with g711_ulaw audio format...")
             await openai_ws.session.update(
                 session={
                     "modalities": ["text", "audio"],
-                    "instructions": f"""
-You are the AI receptionist for {business.name}.
+                    "instructions": f"""You are the AI receptionist for {business.name}.
 Tone: {business.tone}
 Instructions: {business.instructions}
 
 When someone connects, immediately greet them with: "Hello! Thank you for calling {business.name}. How can I help you today?"
 
-If a caller asks business-related questions, always check RAG memory first using function: rag_search.
+If a caller asks business-related questions, check RAG memory using function: rag_search.
 
-Allowed actions:
-{json.dumps(business.allowed_actions)}
-""",
+Allowed actions: {json.dumps(business.allowed_actions)}""",
                     "voice": "alloy",
-                    "input_audio_format": "pcm16",
-                    "output_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": "whisper-1"
-                    },
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
+                    "input_audio_transcription": {"model": "whisper-1"},
                     "turn_detection": {
                         "type": "server_vad",
                         "threshold": 0.5,
@@ -87,14 +82,11 @@ Allowed actions:
                         {
                             "type": "function",
                             "name": "rag_search",
-                            "description": "Search business knowledge base for information.",
+                            "description": "Search business knowledge base",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "query": {
-                                        "type": "string",
-                                        "description": "The search query"
-                                    }
+                                    "query": {"type": "string", "description": "Search query"}
                                 },
                                 "required": ["query"]
                             }
@@ -102,53 +94,50 @@ Allowed actions:
                         {
                             "type": "function",
                             "name": "transfer_call",
-                            "description": "Transfer the call to the forwarding number.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {}
-                            }
+                            "description": "Transfer call to forwarding number",
+                            "parameters": {"type": "object", "properties": {}}
                         }
                     ],
                     "tool_choice": "auto"
                 }
             )
-            
-            # Send an initial message to trigger greeting
-            print("📣 Sending initial message to trigger AI greeting...")
-            await openai_ws.conversation.item.create(
-                item={
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "Hello"}]
-                }
-            )
-            await openai_ws.response.create()
-            print("✅ Initial greeting triggered!")
+            log("✅ Session configured: g711_ulaw, voice=alloy")
 
-            # -----------------------------
-            # 3. Async audio bridge loop
-            # -----------------------------
-            log("🔄 Starting audio bridge loops...")
-            
             async def openai_to_twilio():
                 """AI → Twilio (audio out)"""
                 log("📤 openai_to_twilio loop started")
+                
+                # Wait for Twilio stream to be ready
+                await twilio_connected.wait()
+                log("✅ Twilio connected, starting to send AI audio")
+                
+                # Track timestamp for outbound audio
+                import time
+                timestamp_ms = 0
+                
                 try:
                     async for event in openai_ws:
                         event_type = event.type
-                        print(f"🔔 OpenAI event: {event_type}")
                         
-                        # Send audio back to Twilio
+                        # Send audio to Twilio
                         if event_type == "response.audio.delta":
-                            print(f"🎵 Got audio delta event!")
-                            if hasattr(event, 'delta') and event.delta:
-                                # Delta should be base64-encoded, decode it to bytes
-                                import base64
-                                pcm = base64.b64decode(event.delta)
-                                await websocket.send_bytes(pcm)
-                                print(f"🔊 Sent AI audio frame ({len(pcm)} bytes)")
-                            else:
-                                print(f"⚠️ Audio delta event has no delta data")
+                            if hasattr(event, 'delta') and event.delta and stream_sid:
+                                # Send as Twilio media message (audio is base64 from OpenAI)
+                                payload = event.delta
+                                print(f"🔊 Sending {len(payload)} bytes at timestamp {timestamp_ms}", flush=True)
+                                
+                                await websocket.send_text(json.dumps({
+                                    "event": "media",
+                                    "streamSid": stream_sid,
+                                    "media": {
+                                        "payload": payload,
+                                        "timestamp": str(timestamp_ms)
+                                    }
+                                }))
+                                
+                                # Increment timestamp (20ms per chunk for 8khz mulaw)
+                                timestamp_ms += 20
+                                print(f"✅ Sent to Twilio", flush=True)
                         
                         # Handle function calls
                         elif event_type == "response.function_call_arguments.done":
@@ -156,10 +145,7 @@ Allowed actions:
                             args = json.loads(event.arguments)
                             
                             if function_name == "rag_search":
-                                # Execute RAG search
                                 results = search_knowledge(business_id, args.get("query", ""))
-                                
-                                # Send results back to OpenAI
                                 await openai_ws.conversation.item.create(
                                     item={
                                         "type": "function_call_output",
@@ -173,9 +159,7 @@ Allowed actions:
                                 await openai_ws.response.create()
                             
                             elif function_name == "transfer_call":
-                                # Handle call transfer
                                 if business.forwarding_number:
-                                    # Send TwiML to transfer
                                     await websocket.send_text(json.dumps({
                                         "action": "transfer",
                                         "number": business.forwarding_number
@@ -183,83 +167,83 @@ Allowed actions:
                         
                         # Log transcriptions
                         elif event_type == "conversation.item.input_audio_transcription.completed":
-                            print(f"[USER]: {event.transcript}")
-                        
+                            log(f"[USER]: {event.transcript}")
                         elif event_type == "response.text.delta":
                             print(f"[AI]: {event.delta}", end="", flush=True)
-                        
                         elif event_type == "response.text.done":
-                            print()  # New line after response
+                            print()
                             
                 except Exception as e:
-                    print(f"Error in openai_to_twilio: {e}")
+                    log(f"❌ Error in openai_to_twilio: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             async def twilio_to_openai():
                 """Twilio → GPT (audio in)"""
+                nonlocal stream_sid
                 log("📥 twilio_to_openai loop started")
-                frame_count = 0
+                
+                # Send greeting immediately if stream is already ready
+                if stream_sid:
+                    log("📣 Sending greeting trigger...")
+                    try:
+                        await openai_ws.conversation.item.create(
+                            item={
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "Hello"}]
+                            }
+                        )
+                        await openai_ws.response.create()
+                        log("✅ Greeting triggered!")
+                    except Exception as e:
+                        log(f"❌ Error sending greeting: {e}")
+                
                 try:
                     while True:
-                        print(f"🔄 Waiting for message... (frame {frame_count})")
                         message = await websocket.receive()
-                        frame_count += 1
-                        print(f"📬 Message received! Keys: {message.keys()}")
                         
-                        # Handle text messages (JSON events from Twilio)
                         if "text" in message:
-                            text_data = message["text"]
-                            print(f"📝 Text message: {text_data[:200]}")
                             try:
-                                data = json.loads(text_data)
-                                print(f"✅ JSON parsed. Event type: {data.get('event')}")
+                                data = json.loads(message["text"])
+                                event = data.get("event")
                                 
-                                # Twilio events
-                                if data.get("event") == "connected":
-                                    print("🔗 Twilio: connected event")
+                                if event == "connected":
+                                    log("🔗 Twilio connected")
                                     continue
                                 
-                                if data.get("event") == "start":
-                                    streamSid = data.get('streamSid', 'unknown')
-                                    print(f"▶️ Twilio: start event (streamSid={streamSid})")
+                                if event == "start":
+                                    # Update stream_sid if it wasn't set initially
+                                    if not stream_sid:
+                                        stream_sid = data.get('start', {}).get('streamSid') or data.get('streamSid')
+                                        log(f"▶️ Twilio stream started (streamSid={stream_sid})")
+                                        twilio_connected.set()
                                     continue
                                 
-                                if data.get("event") == "stop":
-                                    print("⏹ Twilio: stop event")
+                                if event == "stop":
+                                    log("⏹ Twilio stream stopped")
                                     break
                                 
-                                if data.get("event") == "media":
-                                    # Twilio sends base64 PCM16
-                                    print(f"📦 Media event received!")
+                                if event == "media":
                                     payload = data.get("media", {}).get("payload", "")
                                     if payload:
-                                        # Payload is already base64-encoded from Twilio, pass it directly
-                                        print(f"🎤 Received Twilio audio frame - sending to OpenAI...")
+                                        # Payload is base64 from Twilio
                                         await openai_ws.input_audio_buffer.append(audio=payload)
-                                        # Trigger a response from OpenAI
-                                        await openai_ws.response.create()
-                                        print(f"✅ Audio sent to OpenAI and response triggered!")
-                                    else:
-                                        print(f"⚠️ No payload in media event")
                                     continue
                                     
-                            except json.JSONDecodeError as je:
-                                print(f"⚠️ JSON decode error: {je}")
+                            except json.JSONDecodeError:
                                 pass
                             except Exception as ex:
-                                log(f"⚠️ Error processing text message: {ex}")
+                                log(f"⚠️ Error processing message: {ex}")
                                 import traceback
                                 traceback.print_exc()
                         
-                        # Handle binary audio data (raw bytes from test page)
                         elif "bytes" in message:
+                            # Handle raw bytes (for testing)
                             import base64
                             audio_bytes = message["bytes"]
-                            print(f"🎤 Received RAW audio frame ({len(audio_bytes)} bytes)")
-                            # Base64 encode for OpenAI
                             audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
                             await openai_ws.input_audio_buffer.append(audio=audio_b64)
-                            await openai_ws.response.create()
-                            print(f"✅ RAW audio sent to OpenAI and response triggered!")
                                 
                 except Exception as e:
                     log(f"❌ Error in twilio_to_openai: {e}")
@@ -267,15 +251,16 @@ Allowed actions:
                     traceback.print_exc()
 
             # Run both tasks concurrently
-            log("🚀 Starting concurrent audio bridge tasks...")
+            log("🚀 Starting audio bridge...")
             await asyncio.gather(
                 twilio_to_openai(),
                 openai_to_twilio()
             )
-            log("✅ Audio bridge tasks completed")
+            log("✅ Audio bridge completed")
             
     except Exception as e:
-        log(f"❌ Error in realtime session: {type(e).__name__}: {e}")
+        log(f"❌ Error in realtime session: {e}")
         import traceback
         traceback.print_exc()
         await websocket.close()
+        

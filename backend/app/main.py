@@ -24,8 +24,8 @@ app.add_middleware(
 
 app.include_router(business.router)
 app.include_router(rag.router)
-app.include_router(call.router)
 app.include_router(stream.router)
+app.include_router(call.router)
 
 
 @app.get("/")

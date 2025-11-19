@@ -83,14 +83,16 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
     # Convert HTTPS to WSS for WebSocket
     api_url = os.getenv('API_URL')
     ws_url = api_url.replace('https://', 'wss://').replace('http://', 'ws://')
-    stream_url = f"{ws_url}/call/stream?business_id={business.id}"
+    stream_url = f"{ws_url}/call/stream"
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say>Connecting you to our AI receptionist.</Say>
-    <Start>
-        <Stream url="{stream_url}" />
-    </Start>
+    <Connect>
+        <Stream url="{stream_url}">
+            <Parameter name="business_id" value="{business.id}" />
+        </Stream>
+    </Connect>
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")
