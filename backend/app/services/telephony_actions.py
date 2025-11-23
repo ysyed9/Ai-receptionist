@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.models.appointment import Appointment
 from app.services.business_service import get_business_by_id
+from app.services.google_sheets import log_job_to_sheets, get_google_sheets_client
 
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -161,12 +162,117 @@ def schedule_appointment(
         db.commit()
         db.refresh(appointment)
         
+        # Update appointment status to "Booked"
+        appointment.status = "Booked"
+        db.commit()
+        
+        # Get call transcript/summary from call log if available
+        call_summary = None
+        if call_log_id:
+            try:
+                from app.models.call_log import CallLog
+                call_log = db.query(CallLog).filter(CallLog.id == call_log_id).first()
+                if call_log and call_log.transcript:
+                    # Use transcript as summary (or generate a shorter summary if needed)
+                    transcript = call_log.transcript.strip()
+                    # Limit summary length to avoid Google Sheets cell limits (50k chars)
+                    if len(transcript) > 1000:
+                        # Use first 1000 chars + "..."
+                        call_summary = transcript[:1000] + "..."
+                    else:
+                        call_summary = transcript
+                    print(f"✅ Retrieved call transcript ({len(call_summary)} chars)")
+            except Exception as e:
+                print(f"⚠️ Could not retrieve call transcript: {e}")
+        
+        # Log to Google Sheets (if configured)
+        sheets_logged = False
+        sheets_config = business.google_sheets_credentials or {}
+        spreadsheet_id = sheets_config.get("spreadsheet_id")
+        worksheet_name = sheets_config.get("worksheet_name", "Jobs")
+        sheets_creds_json = sheets_config.get("credentials_json")
+        sheets_creds_path = sheets_config.get("credentials_path")
+        
+        if spreadsheet_id:
+            try:
+                sheets_result = log_job_to_sheets(
+                    spreadsheet_id=spreadsheet_id,
+                    worksheet_name=worksheet_name,
+                    customer_name=caller_name or "",
+                    customer_email=caller_email or "",
+                    customer_phone=caller_number or "",
+                    appointment_date=appointment_date,
+                    appointment_time=appointment_time,
+                    service_type=service_type or "",
+                    status="Booked",
+                    confirmation_sent="Pending",  # Will update after SMS
+                    call_summary=call_summary or "",  # Add call summary
+                    credentials_json=sheets_creds_json,
+                    credentials_path=sheets_creds_path,
+                    extra_data={
+                        "Booking ID": booking_id or "",
+                        "Booking System": booking_system or ""
+                    }
+                )
+                if sheets_result.get("success"):
+                    sheets_logged = True
+                    print(f"✅ Job logged to Google Sheets")
+                else:
+                    print(f"⚠️ Failed to log to Google Sheets: {sheets_result.get('error')}")
+            except Exception as e:
+                print(f"⚠️ Error logging to Google Sheets: {e}")
+        
+        # Send SMS confirmation via Twilio (if configured)
+        sms_sent = False
+        if caller_number and business.allowed_actions.get("sms", False):
+            try:
+                business_phone = business.phone_number or os.getenv("TWILIO_PHONE_NUMBER")
+                
+                # Create confirmation message
+                sms_message = f"Hi {caller_name or 'there'}! Your appointment with {business.name} is confirmed for {appointment_date} at {appointment_time}."
+                if service_type:
+                    sms_message += f" Service: {service_type}."
+                sms_message += f" Thank you!"
+                
+                sms_result = send_sms(
+                    to_number=caller_number,
+                    message=sms_message,
+                    from_number=business_phone
+                )
+                
+                if sms_result.get("success"):
+                    sms_sent = True
+                    
+                    # Update Google Sheets confirmation status if logged
+                    if sheets_logged and spreadsheet_id:
+                        try:
+                            client = get_google_sheets_client(sheets_creds_json, sheets_creds_path)
+                            if client:
+                                spreadsheet = client.open_by_key(spreadsheet_id)
+                                worksheet = spreadsheet.worksheet(worksheet_name)
+                                # Find the last row and update confirmation status
+                                all_values = worksheet.get_all_values()
+                                if all_values:
+                                    last_row = len(all_values)
+                                    # Update confirmation column (column 9, index 8)
+                                    worksheet.update_cell(last_row, 9, "Yes")
+                        except Exception as e:
+                            print(f"⚠️ Could not update Google Sheets confirmation status: {e}")
+                    
+                    print(f"✅ SMS confirmation sent to {caller_number}")
+                else:
+                    print(f"⚠️ Failed to send SMS: {sms_result.get('error')}")
+            except Exception as e:
+                print(f"⚠️ Error sending SMS confirmation: {e}")
+        
         return {
             "success": True,
             "appointment_id": appointment.id,
             "booking_id": booking_id,
             "booking_url": booking_url if booking_system == "leadconnector" else None,
             "booking_system": booking_system,
+            "sms_sent": sms_sent,
+            "sheets_logged": sheets_logged,
             "message": f"Appointment scheduled for {appointment_date} at {appointment_time}",
             "appointment": {
                 "id": appointment.id,
@@ -176,7 +282,7 @@ def schedule_appointment(
                 "email": caller_email,
                 "phone": caller_number,
                 "service": service_type,
-                "status": "pending"
+                "status": "Booked"
             }
         }
     except Exception as e:

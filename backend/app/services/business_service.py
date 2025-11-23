@@ -23,7 +23,8 @@ def create_business(db: Session, data: BusinessCreate):
         instructions=data.instructions,
         business_hours=data.business_hours,
         allowed_actions=data.allowed_actions,
-        appointment_credentials=data.appointment_credentials
+        appointment_credentials=data.appointment_credentials,
+        google_sheets_credentials=data.google_sheets_credentials
     )
     try:
         db.add(business)

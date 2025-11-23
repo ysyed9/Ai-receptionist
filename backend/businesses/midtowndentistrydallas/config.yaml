@@ -31,6 +31,14 @@ appointment_credentials:
   api_key: ""
   booking_url: "https://api.leadconnectorhq.com/widget/booking/ntRZ2CWaPWexCtIFYxex"
 
+# Google Sheets Job Logging
+# After booking, job details are logged to Google Sheets
+# Make sure to share your Google Sheet with the service account email:
+# ai-receptionist-sheets@ai-receptionist-479101.iam.gserviceaccount.com
+google_sheets_credentials:
+  spreadsheet_id: "1UKvumBWo7JR_7TGLf_jjmfccijiavkAvA63iVs_JE4Q"  # Google Sheets ID
+  worksheet_name: "Jobs"  # credentials_json removed for security  # Name of the worksheet/tab (default: "Jobs")
+
 # Auto-crawl website on sync
 auto_crawl_website: true
 

@@ -1,0 +1,36 @@
+#!/bin/bash
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🚀 STARTING AI RECEPTIONIST BACKEND"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+cd "$(dirname "$0")"
+
+echo "📦 Starting Docker containers..."
+docker compose up -d
+
+echo ""
+echo "⏳ Waiting for services to initialize..."
+sleep 5
+
+echo ""
+echo "🔍 Checking status..."
+docker compose ps
+
+echo ""
+echo "📊 Backend logs (last 20 lines):"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+docker logs ai-backend --tail 20
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "✅ BACKEND STARTED"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "📞 Phone Number: (517) 628-4976"
+echo ""
+echo "📊 Monitor logs: docker logs ai-backend -f"
+echo "🛑 Stop backend: ./stop"
+echo ""
+

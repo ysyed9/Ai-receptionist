@@ -17,3 +17,5 @@ httpx
 python-multipart
 websockets
 pydub
+gspread
+google-auth

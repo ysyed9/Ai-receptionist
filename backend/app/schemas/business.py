@@ -11,6 +11,7 @@ class BusinessCreate(BaseModel):
     business_hours: Optional[Dict[str, Any]] = {}
     allowed_actions: Optional[Dict[str, Any]] = {}
     appointment_credentials: Optional[Dict[str, Any]] = {}
+    google_sheets_credentials: Optional[Dict[str, Any]] = {}
 
 
 class BusinessOut(BaseModel):
@@ -23,6 +24,7 @@ class BusinessOut(BaseModel):
     business_hours: dict | None
     allowed_actions: dict | None
     appointment_credentials: dict | None
+    google_sheets_credentials: dict | None
 
     class Config:
         from_attributes = True

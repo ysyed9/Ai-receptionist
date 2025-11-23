@@ -14,4 +14,5 @@ class Business(Base):
     business_hours = Column(JSON)
     allowed_actions = Column(JSON)
     appointment_credentials = Column(JSON)
+    google_sheets_credentials = Column(JSON)
 

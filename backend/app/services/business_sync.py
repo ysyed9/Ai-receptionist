@@ -84,6 +84,7 @@ def sync_business_to_db(db: Session, config: dict, prompt: str) -> Business:
         business.business_hours = config.get('business_hours', {})
         business.allowed_actions = config.get('allowed_actions', {})
         business.appointment_credentials = config.get('appointment_credentials', {})
+        business.google_sheets_credentials = config.get('google_sheets_credentials', {})
     else:
         # Create new
         print(f"✨ Creating new business: {config['name']}")
@@ -95,7 +96,8 @@ def sync_business_to_db(db: Session, config: dict, prompt: str) -> Business:
             instructions=full_instructions,
             business_hours=config.get('business_hours', {}),
             allowed_actions=config.get('allowed_actions', {}),
-            appointment_credentials=config.get('appointment_credentials', {})
+            appointment_credentials=config.get('appointment_credentials', {}),
+            google_sheets_credentials=config.get('google_sheets_credentials', {})
         )
         db.add(business)
     
