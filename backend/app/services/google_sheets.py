@@ -14,30 +14,32 @@ def get_google_sheets_client(credentials_json: Dict[str, Any] = None, credential
     Get authenticated Google Sheets client
     
     Args:
-        credentials_json: Service account credentials as dict
+        credentials_json: Service account credentials as dict (DEPRECATED - use env vars)
         credentials_path: Path to service account JSON file
     
     Returns:
         gspread.Client or None if credentials invalid
     """
     try:
-        # Try credentials from dict first
-        if credentials_json:
-            creds = Credentials.from_service_account_info(
-                credentials_json,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
-            return gspread.authorize(creds)
+        import json
         
-        # Try credentials from file path
-        if credentials_path and os.path.exists(credentials_path):
-            creds = Credentials.from_service_account_file(
-                credentials_path,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
-            )
-            return gspread.authorize(creds)
+        # PRIORITY 1: Try environment variable (JSON string) - MOST SECURE
+        env_creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")
+        if env_creds_json:
+            try:
+                # Parse JSON string from environment variable
+                creds_dict = json.loads(env_creds_json)
+                creds = Credentials.from_service_account_info(
+                    creds_dict,
+                    scopes=['https://www.googleapis.com/auth/spreadsheets']
+                )
+                return gspread.authorize(creds)
+            except json.JSONDecodeError:
+                print("⚠️  GOOGLE_SHEETS_CREDENTIALS_JSON is not valid JSON")
+            except Exception as e:
+                print(f"⚠️  Error parsing GOOGLE_SHEETS_CREDENTIALS_JSON: {e}")
         
-        # Try environment variable path
+        # PRIORITY 2: Try environment variable (file path) - SECURE
         env_creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH")
         if env_creds_path and os.path.exists(env_creds_path):
             creds = Credentials.from_service_account_file(
@@ -46,7 +48,24 @@ def get_google_sheets_client(credentials_json: Dict[str, Any] = None, credential
             )
             return gspread.authorize(creds)
         
-        print("⚠️  No Google Sheets credentials found")
+        # PRIORITY 3: Try file path parameter (fallback)
+        if credentials_path and os.path.exists(credentials_path):
+            creds = Credentials.from_service_account_file(
+                credentials_path,
+                scopes=['https://www.googleapis.com/auth/spreadsheets']
+            )
+            return gspread.authorize(creds)
+        
+        # PRIORITY 4: Try credentials from dict parameter (DEPRECATED - only for backwards compat)
+        if credentials_json:
+            print("⚠️  Using credentials_json parameter is deprecated. Use GOOGLE_SHEETS_CREDENTIALS_JSON env var instead.")
+            creds = Credentials.from_service_account_info(
+                credentials_json,
+                scopes=['https://www.googleapis.com/auth/spreadsheets']
+            )
+            return gspread.authorize(creds)
+        
+        print("⚠️  No Google Sheets credentials found. Set GOOGLE_SHEETS_CREDENTIALS_JSON or GOOGLE_SHEETS_CREDENTIALS_PATH environment variable.")
         return None
         
     except Exception as e:

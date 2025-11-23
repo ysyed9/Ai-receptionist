@@ -190,8 +190,9 @@ def schedule_appointment(
         sheets_config = business.google_sheets_credentials or {}
         spreadsheet_id = sheets_config.get("spreadsheet_id")
         worksheet_name = sheets_config.get("worksheet_name", "Jobs")
-        sheets_creds_json = sheets_config.get("credentials_json")
-        sheets_creds_path = sheets_config.get("credentials_path")
+        # Credentials now come from environment variables (GOOGLE_SHEETS_CREDENTIALS_JSON or GOOGLE_SHEETS_CREDENTIALS_PATH)
+        # DO NOT use credentials_json from config for security reasons
+        sheets_creds_path = sheets_config.get("credentials_path")  # Still allow path override in config if needed
         
         if spreadsheet_id:
             try:
@@ -207,8 +208,8 @@ def schedule_appointment(
                     status="Booked",
                     confirmation_sent="Pending",  # Will update after SMS
                     call_summary=call_summary or "",  # Add call summary
-                    credentials_json=sheets_creds_json,
-                    credentials_path=sheets_creds_path,
+                    credentials_json=None,  # Use environment variable instead
+                    credentials_path=sheets_creds_path,  # Allow path override from config if needed
                     extra_data={
                         "Booking ID": booking_id or "",
                         "Booking System": booking_system or ""
@@ -246,7 +247,8 @@ def schedule_appointment(
                     # Update Google Sheets confirmation status if logged
                     if sheets_logged and spreadsheet_id:
                         try:
-                            client = get_google_sheets_client(sheets_creds_json, sheets_creds_path)
+                            # Credentials now come from environment variables
+                            client = get_google_sheets_client(credentials_json=None, credentials_path=sheets_creds_path)
                             if client:
                                 spreadsheet = client.open_by_key(spreadsheet_id)
                                 worksheet = spreadsheet.worksheet(worksheet_name)
