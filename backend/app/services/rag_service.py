@@ -16,22 +16,20 @@ CLASS_NAME = os.getenv("WEAVIATE_CLASS_NAME", "BusinessDocs")
 def get_weaviate_client():
     global _weaviate_client
     if _weaviate_client is None:
-        weaviate_url = os.getenv("WEAVIATE_URL", "http://weaviate:8080")
+        weaviate_url = os.getenv("WEAVIATE_URL")
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
-        
-        # Force local Weaviate if URL looks like cloud instance
-        if "gcp.weaviate.cloud" in weaviate_url or "cloud.weaviate.io" in weaviate_url:
-            print(f"⚠️  Warning: Cloud Weaviate URL detected, using local instead: {weaviate_url}")
-            weaviate_url = "http://weaviate:8080"
         
         # Parse URL for weaviate-client v4.x API
         from urllib.parse import urlparse
         parsed = urlparse(weaviate_url)
         host = parsed.hostname or "weaviate"
-        port = parsed.port or 8080
+        port = parsed.port
         scheme = parsed.scheme or "http"
         is_secure = (scheme == "https")
+        
+        if not port:
+            raise ValueError(f"WEAVIATE_URL must include port number. Got: {weaviate_url}")
         
         print(f"🔗 Connecting to Weaviate at {scheme}://{host}:{port}")
         
