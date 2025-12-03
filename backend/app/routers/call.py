@@ -84,7 +84,11 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
     # Twilio will stream audio to /call/stream
     # Convert HTTPS to WSS for WebSocket
     api_url = os.getenv('API_URL')
-    ws_url = api_url.replace('https://', 'wss://').replace('http://', 'ws://')
+    # Extract base URL (remove any path components)
+    from urllib.parse import urlparse, urlunparse
+    parsed_url = urlparse(api_url)
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    ws_url = base_url.replace('https://', 'wss://').replace('http://', 'ws://')
     stream_url = f"{ws_url}/call/stream"
 
     # Use <Start><Recording> TwiML to record calls with streams
