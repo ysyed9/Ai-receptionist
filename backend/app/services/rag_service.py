@@ -1,5 +1,6 @@
 import os
 import weaviate
+from weaviate.auth import AuthApiKey
 from openai import OpenAI
 from sqlalchemy.orm import Session
 from app.services.chunker import chunk_text
@@ -17,38 +18,28 @@ def get_weaviate_client():
     global _weaviate_client
     if _weaviate_client is None:
         weaviate_url = os.getenv("WEAVIATE_URL")
+        weaviate_api_key = os.getenv("WEAVIATE_API_KEY")
+        
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
         
-        # Parse URL for weaviate-client v4.x API
-        from urllib.parse import urlparse
-        parsed = urlparse(weaviate_url)
-        host = parsed.hostname or "weaviate"
-        scheme = parsed.scheme or "http"
-        is_secure = (scheme == "https")
-        
-        # Use default ports if not specified
-        # HTTPS defaults to 443, HTTP defaults to 8080 (local Weaviate)
-        if parsed.port:
-            port = parsed.port
-        elif is_secure:
-            port = 443  # Default HTTPS port
-        else:
-            port = 8080  # Default HTTP port for local Weaviate
-        
-        print(f"🔗 Connecting to Weaviate at {scheme}://{host}:{port}")
+        print(f"🔗 Connecting to Weaviate at {weaviate_url}")
         
         try:
-            # Use connect_to_custom for v4.x API
-            _weaviate_client = weaviate.connect_to_custom(
-                http_host=host,
-                http_port=port,
-                http_secure=is_secure,
-                grpc_host=host,
-                grpc_port=50051,
-                grpc_secure=is_secure
+            # Build authentication if API key is provided
+            auth_config = None
+            if weaviate_api_key and weaviate_api_key.lower() != "none" and weaviate_api_key.strip():
+                auth_config = AuthApiKey(api_key=weaviate_api_key)
+                print(f"🔑 Using API key authentication")
+            else:
+                print(f"🔓 No API key provided, connecting without authentication")
+            
+            # Create client with authentication
+            _weaviate_client = weaviate.Client(
+                url=weaviate_url,
+                auth_client_secret=auth_config
             )
-            print(f"✅ Connected to Weaviate at {host}:{port}")
+            print(f"✅ Connected to Weaviate")
         except Exception as e:
             print(f"❌ Failed to connect to Weaviate: {e}")
             raise
