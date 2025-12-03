@@ -1,5 +1,5 @@
 import os
-import weaviate
+from weaviate import Client
 from weaviate.auth import AuthApiKey
 from openai import OpenAI
 from sqlalchemy.orm import Session
@@ -29,13 +29,13 @@ def get_weaviate_client():
             # Build authentication if API key is provided
             auth_config = None
             if weaviate_api_key and weaviate_api_key.lower() != "none" and weaviate_api_key.strip():
-                auth_config = AuthApiKey(api_key=weaviate_api_key)
+                auth_config = AuthApiKey(weaviate_api_key)
                 print(f"🔑 Using API key authentication")
             else:
                 print(f"🔓 No API key provided, connecting without authentication")
             
-            # Create client with authentication
-            _weaviate_client = weaviate.Client(
+            # Create client with authentication (v4 syntax)
+            _weaviate_client = Client(
                 url=weaviate_url,
                 auth_client_secret=auth_config
             )
