@@ -109,3 +109,24 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/recording-status")
+async def recording_status(request: Request):
+    """
+    Handle Twilio recording status webhooks.
+
+    This endpoint is used only for receiving status callbacks from Twilio
+    about the call recording. It must return 200 so Twilio does not treat
+    it as an error, but it does not need to modify call behavior.
+    """
+    try:
+        form = await request.form()
+        data = dict(form)
+        print("📼 Recording status callback received:", data)
+    except Exception as e:
+        # Log but don't fail the webhook; always return 200 to Twilio
+        print(f"⚠️ Error parsing recording status callback: {e}")
+
+    # Twilio is fine with an empty 200 OK response
+    return Response(content="", media_type="text/plain")
