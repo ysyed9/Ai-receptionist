@@ -1,5 +1,5 @@
 import os
-from weaviate import Client
+import weaviate
 from weaviate.auth import AuthApiKey
 from openai import OpenAI
 from sqlalchemy.orm import Session
@@ -23,7 +23,22 @@ def get_weaviate_client():
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
         
-        print(f"🔗 Connecting to Weaviate at {weaviate_url}")
+        # Parse URL for connection parameters
+        from urllib.parse import urlparse
+        parsed = urlparse(weaviate_url)
+        host = parsed.hostname or "weaviate"
+        scheme = parsed.scheme or "http"
+        is_secure = (scheme == "https")
+        
+        # Use default ports if not specified
+        if parsed.port:
+            port = parsed.port
+        elif is_secure:
+            port = 443  # Default HTTPS port
+        else:
+            port = 8080  # Default HTTP port for local Weaviate
+        
+        print(f"🔗 Connecting to Weaviate at {scheme}://{host}:{port}")
         
         try:
             # Build authentication if API key is provided
@@ -34,10 +49,15 @@ def get_weaviate_client():
             else:
                 print(f"🔓 No API key provided, connecting without authentication")
             
-            # Create client with authentication (v4 syntax)
-            _weaviate_client = Client(
-                url=weaviate_url,
-                auth_client_secret=auth_config
+            # Create client with authentication using connect_to_custom (v4 syntax)
+            _weaviate_client = weaviate.connect_to_custom(
+                http_host=host,
+                http_port=port,
+                http_secure=is_secure,
+                grpc_host=host,
+                grpc_port=50051,
+                grpc_secure=is_secure,
+                auth_credentials=auth_config
             )
             print(f"✅ Connected to Weaviate")
         except Exception as e:
