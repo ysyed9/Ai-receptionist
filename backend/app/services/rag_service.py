@@ -16,26 +16,39 @@ CLASS_NAME = os.getenv("WEAVIATE_CLASS_NAME", "BusinessDocs")
 def get_weaviate_client():
     global _weaviate_client
     if _weaviate_client is None:
-        weaviate_url = os.getenv("WEAVIATE_URL")
+        weaviate_url = os.getenv("WEAVIATE_URL", "http://weaviate:8080")
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
+        
+        # Force local Weaviate if URL looks like cloud instance
+        if "gcp.weaviate.cloud" in weaviate_url or "cloud.weaviate.io" in weaviate_url:
+            print(f"⚠️  Warning: Cloud Weaviate URL detected, using local instead: {weaviate_url}")
+            weaviate_url = "http://weaviate:8080"
+        
         # Parse URL for weaviate-client v4.x API
         from urllib.parse import urlparse
         parsed = urlparse(weaviate_url)
-        host = parsed.hostname or "localhost"
+        host = parsed.hostname or "weaviate"
         port = parsed.port or 8080
         scheme = parsed.scheme or "http"
         is_secure = (scheme == "https")
         
-        # Use connect_to_custom for v4.x API
-        _weaviate_client = weaviate.connect_to_custom(
-            http_host=host,
-            http_port=port,
-            http_secure=is_secure,
-            grpc_host=host,
-            grpc_port=50051,
-            grpc_secure=is_secure
-        )
+        print(f"🔗 Connecting to Weaviate at {scheme}://{host}:{port}")
+        
+        try:
+            # Use connect_to_custom for v4.x API
+            _weaviate_client = weaviate.connect_to_custom(
+                http_host=host,
+                http_port=port,
+                http_secure=is_secure,
+                grpc_host=host,
+                grpc_port=50051,
+                grpc_secure=is_secure
+            )
+            print(f"✅ Connected to Weaviate at {host}:{port}")
+        except Exception as e:
+            print(f"❌ Failed to connect to Weaviate: {e}")
+            raise
     return _weaviate_client
 
 
@@ -49,33 +62,43 @@ def embed_text(text: str):
 
 def ingest_text(db: Session, business_id: int, text: str, source="manual"):
     chunks = chunk_text(text)
-    weaviate_client = get_weaviate_client()
+    
+    try:
+        weaviate_client = get_weaviate_client()
+    except Exception as e:
+        raise Exception(f"Connection to Weaviate failed. Details: {e}")
 
     # Get or create collection
     try:
         collection = weaviate_client.collections.get(CLASS_NAME)
     except Exception:
         # Collection doesn't exist, create it
-        weaviate_client.collections.create(
-            name=CLASS_NAME,
-            properties=[
-                {"name": "text", "dataType": ["text"]},
-                {"name": "business_id", "dataType": ["text"]},
-            ]
-        )
-        collection = weaviate_client.collections.get(CLASS_NAME)
+        try:
+            weaviate_client.collections.create(
+                name=CLASS_NAME,
+                properties=[
+                    {"name": "text", "dataType": ["text"]},
+                    {"name": "business_id", "dataType": ["text"]},
+                ]
+            )
+            collection = weaviate_client.collections.get(CLASS_NAME)
+        except Exception as e:
+            raise Exception(f"Failed to create Weaviate collection: {e}")
 
     for chunk in chunks:
         vector = embed_text(chunk)
 
         # Store in vector DB using v4.x API
-        collection.data.insert(
-            properties={
-                "business_id": str(business_id),
-                "text": chunk
-            },
-            vector=vector
-        )
+        try:
+            collection.data.insert(
+                properties={
+                    "business_id": str(business_id),
+                    "text": chunk
+                },
+                vector=vector
+            )
+        except Exception as e:
+            raise Exception(f"Failed to insert into Weaviate: {e}")
 
         # Store raw text in Postgres
         db_obj = BusinessDocument(

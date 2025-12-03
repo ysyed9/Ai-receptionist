@@ -117,18 +117,29 @@ def crawl_and_ingest_website(db: Session, business_id: int, website_url: str):
             print(f"      ❌ Failed to crawl: {content}")
             return
         
-        # Ingest the crawled content
-        ingest_text(
-            db=db,
-            business_id=business_id,
-            text=content,
-            source=f"website:{website_url}"
-        )
-        
-        print(f"      ✅ Website content ingested ({len(content)} characters)")
+        # Try to ingest the crawled content (but don't fail if Weaviate is unavailable)
+        try:
+            ingest_text(
+                db=db,
+                business_id=business_id,
+                text=content,
+                source=f"website:{website_url}"
+            )
+            print(f"      ✅ Website content ingested ({len(content)} characters)")
+        except Exception as ingest_error:
+            error_msg = str(ingest_error)
+            if "Weaviate" in error_msg or "weaviate" in error_msg or "timed out" in error_msg.lower() or "connection" in error_msg.lower():
+                print(f"      ⚠️  Website crawled successfully but Weaviate ingestion skipped")
+                print(f"      💡 Content will be available via RAG after Weaviate connection is restored")
+            else:
+                print(f"      ⚠️  Ingestion error (non-fatal): {ingest_error}")
         
     except Exception as e:
-        print(f"      ❌ Error crawling website: {e}")
+        error_msg = str(e)
+        if "Weaviate" in error_msg or "weaviate" in error_msg or "timed out" in error_msg.lower():
+            print(f"      ⚠️  Website crawl/ingestion skipped due to Weaviate connection issue")
+        else:
+            print(f"      ❌ Error crawling website: {e}")
 
 
 def ingest_knowledge_files(db: Session, business_id: int, knowledge_files: list):
