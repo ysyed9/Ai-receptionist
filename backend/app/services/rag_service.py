@@ -49,16 +49,33 @@ def get_weaviate_client():
             else:
                 print(f"🔓 No API key provided, connecting without authentication")
             
-            # Create client with authentication using connect_to_custom (v4 syntax)
-            _weaviate_client = weaviate.connect_to_custom(
-                http_host=host,
-                http_port=port,
-                http_secure=is_secure,
-                grpc_host=host,
-                grpc_port=50051,
-                grpc_secure=is_secure,
-                auth_credentials=auth_config
-            )
+            # Check if this is a cloud instance (free tier may not support gRPC)
+            is_cloud = "gcp.weaviate.cloud" in weaviate_url or "cloud.weaviate.io" in weaviate_url or "weaviate.cloud" in weaviate_url
+            
+            if is_cloud:
+                # For cloud instances, skip gRPC initialization checks (free tier may not have gRPC)
+                print(f"☁️  Cloud instance detected, skipping gRPC checks")
+                _weaviate_client = weaviate.connect_to_custom(
+                    http_host=host,
+                    http_port=port,
+                    http_secure=is_secure,
+                    grpc_host=host,
+                    grpc_port=50051,
+                    grpc_secure=is_secure,
+                    auth_credentials=auth_config,
+                    skip_init_checks=True  # Skip gRPC health checks for cloud instances
+                )
+            else:
+                # For local instances, use normal connection
+                _weaviate_client = weaviate.connect_to_custom(
+                    http_host=host,
+                    http_port=port,
+                    http_secure=is_secure,
+                    grpc_host=host,
+                    grpc_port=50051,
+                    grpc_secure=is_secure,
+                    auth_credentials=auth_config
+                )
             print(f"✅ Connected to Weaviate")
         except Exception as e:
             print(f"❌ Failed to connect to Weaviate: {e}")
