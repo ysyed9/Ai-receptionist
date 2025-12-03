@@ -24,12 +24,17 @@ def get_weaviate_client():
         from urllib.parse import urlparse
         parsed = urlparse(weaviate_url)
         host = parsed.hostname or "weaviate"
-        port = parsed.port
         scheme = parsed.scheme or "http"
         is_secure = (scheme == "https")
         
-        if not port:
-            raise ValueError(f"WEAVIATE_URL must include port number. Got: {weaviate_url}")
+        # Use default ports if not specified
+        # HTTPS defaults to 443, HTTP defaults to 8080 (local Weaviate)
+        if parsed.port:
+            port = parsed.port
+        elif is_secure:
+            port = 443  # Default HTTPS port
+        else:
+            port = 8080  # Default HTTP port for local Weaviate
         
         print(f"🔗 Connecting to Weaviate at {scheme}://{host}:{port}")
         
