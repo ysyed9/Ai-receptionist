@@ -90,6 +90,9 @@ async def inbound_call(request: Request, db: Session = Depends(get_db)):
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
     ws_url = base_url.replace('https://', 'wss://').replace('http://', 'ws://')
     stream_url = f"{ws_url}/call/stream"
+    
+    print(f"🔗 Generated stream URL: {stream_url}")
+    print(f"   (from API_URL: {api_url})")
 
     # Use <Start><Recording> TwiML to record calls with streams
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
