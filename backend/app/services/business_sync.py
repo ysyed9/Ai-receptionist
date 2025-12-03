@@ -117,22 +117,37 @@ def crawl_and_ingest_website(db: Session, business_id: int, website_url: str):
             print(f"      ❌ Failed to crawl: {content}")
             return
         
-        # Try to ingest the crawled content (but don't fail if Weaviate is unavailable)
-        try:
-            ingest_text(
-                db=db,
-                business_id=business_id,
-                text=content,
-                source=f"website:{website_url}"
-            )
-            print(f"      ✅ Website content ingested ({len(content)} characters)")
-        except Exception as ingest_error:
-            error_msg = str(ingest_error)
-            if "Weaviate" in error_msg or "weaviate" in error_msg or "timed out" in error_msg.lower() or "connection" in error_msg.lower():
-                print(f"      ⚠️  Website crawled successfully but Weaviate ingestion skipped")
-                print(f"      💡 Content will be available via RAG after Weaviate connection is restored")
-            else:
-                print(f"      ⚠️  Ingestion error (non-fatal): {ingest_error}")
+        # Try to ingest the crawled content (with retry logic)
+        max_retries = 3
+        ingested = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                ingest_text(
+                    db=db,
+                    business_id=business_id,
+                    text=content,
+                    source=f"website:{website_url}"
+                )
+                print(f"      ✅ Website content ingested ({len(content)} characters)")
+                ingested = True
+                break
+            except Exception as ingest_error:
+                error_msg = str(ingest_error)
+                if attempt < max_retries:
+                    print(f"      ⏳ Ingestion attempt {attempt}/{max_retries} failed, retrying... ({error_msg[:100]})")
+                    import time
+                    time.sleep(2)  # Wait 2 seconds before retry
+                else:
+                    # Final attempt failed
+                    if "Weaviate" in error_msg or "weaviate" in error_msg or "timed out" in error_msg.lower() or "connection" in error_msg.lower():
+                        print(f"      ⚠️  Website crawled successfully but Weaviate ingestion skipped after {max_retries} attempts")
+                        print(f"      💡 Error: {error_msg[:150]}")
+                        print(f"      💡 Content will be available via RAG after Weaviate connection is restored")
+                    else:
+                        print(f"      ⚠️  Ingestion error after {max_retries} attempts: {error_msg[:150]}")
+        
+        if not ingested:
+            print(f"      ⚠️  Website content will not be available via RAG until ingestion succeeds")
         
     except Exception as e:
         error_msg = str(e)
