@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import os
 
 from app.routers import business, rag, call, stream
@@ -12,14 +13,17 @@ from app.services.business_sync import sync_all_businesses
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AI Receptionist Backend")
 
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Run business sync on startup"""
     print("\n🚀 Starting AI Receptionist Backend...")
     sync_all_businesses()
+    yield
+    # Cleanup code can go here if needed
+
+
+app = FastAPI(title="AI Receptionist Backend", lifespan=lifespan)
 
 # Add CORS middleware for WebSocket testing
 app.add_middleware(

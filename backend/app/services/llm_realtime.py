@@ -42,6 +42,11 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
     stream_sid = initial_stream_sid
     twilio_connected = asyncio.Event()
     
+    # Track call start time for 90 second limit
+    import time
+    call_start_time = time.time()
+    CALL_DURATION_LIMIT = 90  # 1 minute 30 seconds
+    
     # If we already have stream_sid, mark as connected
     if stream_sid:
         log(f"✅ Twilio already connected (streamSid={stream_sid})")
@@ -59,15 +64,15 @@ async def handle_realtime_audio(websocket: WebSocket, business_id: int, initial_
             await openai_ws.session.update(
                 session={
                     "modalities": ["text", "audio"],
-                    "instructions": f"""You are the AI receptionist for {business.name}.
-Tone: {business.tone}
-Instructions: {business.instructions}
+                    "instructions": f"""CRITICAL FIRST MESSAGE: When the call starts, you MUST say EXACTLY: "This is the DEMO for AI Receptionist. Would you like to learn what I can do?" and nothing else first. DO NOT say "thanks for calling" or mention any business name.
 
-When someone connects, simply say "Hello" and wait for them to speak.
+You are the AI receptionist for {business.name or 'the business'}.
+Tone: {business.tone or 'friendly and helpful'}
+Instructions: {business.instructions or 'Be helpful and answer questions professionally.'}
 
 If a caller asks business-related questions, check RAG memory using function: rag_search.
 
-Allowed actions: {json.dumps(business.allowed_actions)}""",
+Allowed actions: {json.dumps(business.allowed_actions or {})}""",
                     "voice": "shimmer",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
@@ -95,6 +100,12 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                             "type": "function",
                             "name": "transfer_call",
                             "description": "Transfer call to forwarding number",
+                            "parameters": {"type": "object", "properties": {}}
+                        },
+                        {
+                            "type": "function",
+                            "name": "end_call",
+                            "description": "End the call when the caller is done or when the demo time limit is reached. Use this when the caller says goodbye, thanks, or indicates they're finished, or when you've reached the 1 minute 30 second time limit.",
                             "parameters": {"type": "object", "properties": {}}
                         }
                     ],
@@ -164,6 +175,15 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                                         "action": "transfer",
                                         "number": business.forwarding_number
                                     }))
+                            
+                            elif function_name == "end_call":
+                                log("📞 AI requested to end the call")
+                                await websocket.send_text(json.dumps({
+                                    "event": "stop"
+                                }))
+                                # Close the connection
+                                await websocket.close()
+                                return
                         
                         # Log transcriptions
                         elif event_type == "conversation.item.input_audio_transcription.completed":
@@ -250,12 +270,31 @@ Allowed actions: {json.dumps(business.allowed_actions)}""",
                     import traceback
                     traceback.print_exc()
 
-            # Run both tasks concurrently
+            # Timer task to end call after 90 seconds
+            async def call_timer():
+                """End call after 90 seconds"""
+                await asyncio.sleep(CALL_DURATION_LIMIT)
+                elapsed = time.time() - call_start_time
+                log(f"⏰ Call duration limit reached ({elapsed:.1f}s), ending call...")
+                try:
+                    await websocket.send_text(json.dumps({
+                        "event": "stop"
+                    }))
+                    await websocket.close()
+                except:
+                    pass
+            
+            # Run all tasks concurrently
             log("🚀 Starting audio bridge...")
-            await asyncio.gather(
-                twilio_to_openai(),
-                openai_to_twilio()
-            )
+            try:
+                await asyncio.gather(
+                    twilio_to_openai(),
+                    openai_to_twilio(),
+                    call_timer(),
+                    return_exceptions=True
+                )
+            except Exception as e:
+                log(f"⚠️ Task completed with exception: {e}")
             log("✅ Audio bridge completed")
             
     except Exception as e:

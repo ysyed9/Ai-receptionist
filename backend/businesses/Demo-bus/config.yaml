@@ -1,12 +1,12 @@
 # Business Configuration
-name: "Midtown Family Dentistry of Dallas"
+name: "DEMO"
 slug: "midtowndentistrydallas"
 phone_number: "+15176284976"
 forwarding_number: "+14692900609"
-website_url: "https://www.midtowndentistrydallas.com/"
 
 # AI Personality
 tone: "warm, witty, quick-talking; conversationally human"
+system_prompt: "You are an AI receptionist for a DEMO of AI-Rep. This call is limited to 1 minute. Start by saying: 'Hello this is a demo of the AI-Receptionist'. Keep responses brief and wrap up after 50-55 seconds."
 
 # Business Hours
 business_hours:
@@ -33,4 +33,3 @@ appointment_credentials:
 
 # Auto-crawl website on sync
 auto_crawl_website: true
-

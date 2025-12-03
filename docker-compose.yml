@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
 
   backend:
@@ -29,10 +27,11 @@ services:
     image: semitechnologies/weaviate:latest
     container_name: ai-weaviate
     restart: always
+    env_file:
+      - ./backend/.env
     environment:
       QUERY_DEFAULTS_LIMIT: 25
       ENABLE_MODULES: text2vec-openai
-      OPENAI_APIKEY: ${OPENAI_API_KEY}
     ports:
       - "8080:8080"
 
